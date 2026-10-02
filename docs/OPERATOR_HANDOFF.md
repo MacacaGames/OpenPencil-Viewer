@@ -19,6 +19,10 @@
 
 Docker 的 `-m` 是記憶體限制；掛載用 `--mount` 或 `-v`。本專案例子統一用 `--mount ... readonly`，避免不存在的路徑被自動建成空目錄。
 
+Synology Container Manager 的 Project 編輯器可使用獨立範本 [compose.synology.ui.example.yml](../deploy/compose.synology.ui.example.yml)，不需要 extends 或 `.env`。替換 image 的 placeholder 為 CI 成功後的 GHCR manifest digest，或把整個 image 值改成已匯入且符合 NAS 架構的本機 imageId。範例 host paths 位於 `/volume1/docker/openpencil-viewer`：private/config.json、private/directory.json、private/google-oauth.json、test_files、state，啟動前必須存在。config 與 directory 先用公用範本；Google JSON 手動複製，不能放進 Git。新的專用 state 目錄由 UID/GID 10001 擁有、mode0700；private 父目錄0700，只掛 UID10001 可讀的單一 JSON。測試 root 保持 RO。
+
+此獨立範本預設 `127.0.0.1:24681:3000`，適用同 NAS 的反向代理。若現有 nginx 在另一台主機，改成 NAS 的指定私有 IP，限制 proxy 來源並更新 nginx upstream；不能假定目前 Mac 的 `10.0.1.31` 就是 NAS IP。domain／hd 已填入你的設定。Container Manager 專案檔本身不會設定 Google client、NAS 帳號／ACL 或執行實機驗收。
+
 ## 準備 JSON 與網域
 
 `deploy/config.example.json` 是 Portal 設定；Google 下載的 OAuth JSON 是**另一份檔案**，格式必須含 `web.client_id`、`web.client_secret` 及精確 `web.redirect_uris`。Service account 或 installed-app JSON 不適用。程式忽略 JSON 內的 endpoint 欄位，固定使用 Google OIDC endpoints。

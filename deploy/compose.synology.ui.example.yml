@@ -1,0 +1,50 @@
+# Standalone template for Synology Container Manager > Project.
+# Replace the image digest and host paths before starting an isolated test.
+name: openpencil-viewer
+services:
+  portal:
+    image: ghcr.io/macacagames/openpencil-viewer@sha256:REPLACE_WITH_TESTED_DIGEST
+    user: '10001:10001'
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PORTAL_CONFIG: /config/config.json
+      GOOGLE_OAUTH_FILE: /run/secrets/google-oauth.json
+      PORTAL_ORIGIN: https://openpencil.macaca.games
+      GOOGLE_HOSTED_DOMAINS: macaca.games
+    # Same-NAS reverse proxy. For a remote proxy, bind only the NAS LAN IP.
+    ports: ['127.0.0.1:24681:3000']
+    volumes:
+      - type: bind
+        source: /volume1/docker/openpencil-viewer/private/config.json
+        target: /config/config.json
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: /volume1/docker/openpencil-viewer/private/directory.json
+        target: /config/directory.json
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: /volume1/docker/openpencil-viewer/private/google-oauth.json
+        target: /run/secrets/google-oauth.json
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: /volume1/docker/openpencil-viewer/test_files
+        target: /data/designs
+        read_only: true
+        bind: { create_host_path: false, propagation: rprivate }
+      - type: bind
+        source: /volume1/docker/openpencil-viewer/state
+        target: /state
+        bind: { create_host_path: false }
+    tmpfs: ['/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777']
+    pids_limit: 128
+    mem_limit: 4g
+    cpus: 2.0
+    stop_grace_period: 20s
+    logging: { driver: json-file, options: { max-size: '10m', max-file: '3' } }
