@@ -3,7 +3,8 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import { bodyLimit } from 'hono/body-limit'
 import { Readable } from 'node:stream'
-import { readFileSync } from 'node:fs'
+import { constants, openSync, closeSync, fstatSync, readSync } from 'node:fs'
+import { NasBridge } from '../../packages/nas-bridge/index.ts'
 import type { Config } from './config.ts'
 import { State } from './state.ts'
 import { googleStart, exchangeGoogle } from './oidc.ts'
@@ -37,7 +38,7 @@ export function createPortal(
     throw error
   }
   const mockRoot = config.roots[0]?.id
-  const authz =
+  const authz: AuthorizationProvider =
     options.authorization ??
     (config.authorizationMode === 'mock'
       ? new MockAuthorization(
@@ -56,7 +57,21 @@ export function createPortal(
             ]
           ])
         )
-      : new DsmStrictAuthorization())
+      : new DsmStrictAuthorization(
+          config.nasBridge
+            ? new NasBridge(
+                config.nasBridge,
+                config.environment,
+                config.roots.map((root) => root.id),
+                index.identities,
+                config.maxFileBytes,
+                config.environment === 'development' &&
+                  config.identityProvider === 'mock'
+              )
+            : undefined
+        ))
+  const bridge =
+    authz instanceof DsmStrictAuthorization ? authz.bridge : undefined
   const cookieName = config.origin.startsWith('https:')
     ? '__Host-portal'
     : 'portal'
@@ -69,10 +84,40 @@ export function createPortal(
   }
   let downloads = 0
   const principalDownloads = new Map<string, number>()
-  const directory = () => {
+  const directory = async () => {
+    if (bridge) return bridge.directory()
+    if (authz.directory) return authz.directory()
+    let fd: number | undefined
     try {
+      fd = openSync(
+        config.directoryPath,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+      )
+      const before = fstatSync(fd),
+        limit = 4 * 1024 * 1024
+      if (!before.isFile() || before.size > limit) throw new Error('bounded')
+      const bytes = Buffer.alloc(before.size + 1)
+      let length = 0
+      while (length < bytes.length) {
+        const received = readSync(
+          fd,
+          bytes,
+          length,
+          bytes.length - length,
+          null
+        )
+        if (!received) break
+        length += received
+      }
+      const after = fstatSync(fd)
+      if (
+        length !== before.size ||
+        after.size !== before.size ||
+        after.mtimeMs !== before.mtimeMs
+      )
+        throw new Error('changed')
       const snapshot = parseDirectory(
-        JSON.parse(readFileSync(config.directoryPath, 'utf8'))
+        JSON.parse(bytes.subarray(0, length).toString('utf8'))
       )
       if (
         config.environment === 'production' &&
@@ -82,12 +127,14 @@ export function createPortal(
       return snapshot
     } catch {
       throw new AppError('directory-unavailable', 503)
+    } finally {
+      if (fd !== undefined) closeSync(fd)
     }
   }
-  const identify = (cookie: string | undefined) => {
+  const identify = async (cookie: string | undefined) => {
     const session = state.session(cookie)
     try {
-      const snapshot = directory(),
+      const snapshot = await directory(),
         principal = resolvePrincipal(snapshot, session.identity)
       state.bind(session.identity, principal, snapshot)
       if (
@@ -102,7 +149,7 @@ export function createPortal(
     }
   }
   const allowed = async (principal: Principal, record: FileRecord) => {
-    if (!index.online.get(record.rootId) || !authz.ready())
+    if (!index.online.get(record.rootId) || !(await authz.ready()))
       throw new AppError('source-unavailable', 503)
     const checked = new Set<string>()
     let current: FileRecord | undefined = record
@@ -117,7 +164,7 @@ export function createPortal(
   }
   const authorize = async (principal: Principal, id: string) => {
     if (
-      !authz.ready() ||
+      !(await authz.ready()) ||
       config.roots.some((root) => !index.online.get(root.id))
     )
       throw new AppError('source-unavailable', 503)
@@ -153,17 +200,17 @@ export function createPortal(
     )
   )
   app.get('/health/live', (c) => c.json({ live: true }))
-  app.get('/health/ready', (c) => {
+  app.get('/health/ready', async (c) => {
     let dirReady = false
     try {
-      const snapshot = directory()
+      const snapshot = await directory()
       dirReady =
         snapshot.expiresAt > Date.now() &&
         snapshot.observedAt >= Date.now() - 300000
     } catch {}
     const ready =
       authz.mode === config.authorizationMode &&
-      authz.ready() &&
+      (await authz.ready()) &&
       dirReady &&
       config.roots.every((r) => index.online.get(r.id))
     return c.json({ ready, authorization: authz.mode }, ready ? 200 : 503)
@@ -201,7 +248,7 @@ export function createPortal(
         },
         config.allowedHostedDomains
       ),
-      snapshot = directory(),
+      snapshot = await directory(),
       principal = resolvePrincipal(snapshot, identity)
     const previous = getCookie(c, cookieName)
     if (previous) {
@@ -238,7 +285,7 @@ export function createPortal(
     // A verified Google identity is still not a NAS principal or a file grant.
     // Record only the phase, without tokens/email, when NAS setup is pending.
     state.audit('', '', 'oidc-verified')
-    const snapshot = directory(),
+    const snapshot = await directory(),
       principal = resolvePrincipal(snapshot, identity)
     const previous = getCookie(c, cookieName)
     if (previous) {
@@ -254,17 +301,17 @@ export function createPortal(
     )
     return c.redirect('/')
   })
-  app.post('/auth/logout', (c) => {
+  app.post('/auth/logout', async (c) => {
     requireOrigin(c.req.header('Origin'))
-    const { session } = identify(getCookie(c, cookieName))
+    const { session } = await identify(getCookie(c, cookieName))
     if (c.req.header('X-CSRF-Token') !== session.csrf)
       throw new AppError('csrf-rejected', 403)
     state.revoke(session.id)
     deleteCookie(c, cookieName, cookieOptions)
     return c.json({ ok: true })
   })
-  app.get('/api/me', (c) => {
-    const { session, principal } = identify(getCookie(c, cookieName))
+  app.get('/api/me', async (c) => {
+    const { session, principal } = await identify(getCookie(c, cookieName))
     return c.json({
       email: session.identity.email,
       username: principal.username,
@@ -275,7 +322,7 @@ export function createPortal(
     })
   })
   app.get('/api/roots', async (c) => {
-    const { principal } = identify(getCookie(c, cookieName))
+    const { principal } = await identify(getCookie(c, cookieName))
     const result: FileRecord[] = []
     for (const r of index.records.values())
       if (r.relative === '' && (await allowed(principal, r))) result.push(r)
@@ -283,8 +330,11 @@ export function createPortal(
   })
   for (const endpoint of ['/api/files', '/api/search'])
     app.get(endpoint, async (c) => {
-      const { principal } = identify(getCookie(c, cookieName))
-      if (!authz.ready() || config.roots.some((r) => !index.online.get(r.id)))
+      const { principal } = await identify(getCookie(c, cookieName))
+      if (
+        !(await authz.ready()) ||
+        config.roots.some((r) => !index.online.get(r.id))
+      )
         throw new AppError('source-unavailable', 503)
       const parentId = c.req.query('parentId'),
         q = (c.req.query('q') ?? '').slice(0, 256).toLowerCase()
@@ -319,22 +369,28 @@ export function createPortal(
       })
     })
   app.get('/api/files/:id', async (c) => {
-    const { principal } = identify(getCookie(c, cookieName))
+    const { principal } = await identify(getCookie(c, cookieName))
     const record = await authorize(principal, c.req.param('id'))
-    if (record.kind === 'file') await index.stat(record)
+    if (record.kind === 'file') {
+      if (bridge) await bridge.stat(principal, record)
+      else if (authz.stat) await authz.stat(principal, record)
+      else await index.stat(record)
+    }
     return c.json(record)
   })
   app.get('/api/files/:id/thumbnail', async (c) => {
-    const { principal } = identify(getCookie(c, cookieName))
+    const { principal } = await identify(getCookie(c, cookieName))
     await authorize(principal, c.req.param('id'))
     throw new AppError('thumbnail-unavailable', 404)
   })
   app.on(['GET', 'HEAD'], '/api/files/:id/content', async (c) => {
-    const { principal } = identify(getCookie(c, cookieName))
+    const { principal } = await identify(getCookie(c, cookieName))
     const record = await authorize(principal, c.req.param('id'))
     if (record.kind !== 'file') throw new AppError('not-found', 404)
     if (c.req.method === 'HEAD') {
-      await index.stat(record)
+      if (bridge) await bridge.stat(principal, record)
+      else if (authz.stat) await authz.stat(principal, record)
+      else await index.stat(record)
       return new Response(null, {
         headers: {
           'Content-Length': String(record.size),
@@ -353,7 +409,11 @@ export function createPortal(
     const requestAbort = () => cancel.abort()
     c.req.raw.signal.addEventListener('abort', requestAbort, { once: true })
     try {
-      const source = await index.open(record, cancel.signal)
+      const source = bridge
+        ? await bridge.open(principal, record, cancel.signal)
+        : authz.open
+          ? await authz.open(principal, record, cancel.signal)
+          : await index.open(record, cancel.signal)
       const stream = Readable.toWeb(source) as ReadableStream<Uint8Array>
       const reader = stream.getReader()
       let finished = false

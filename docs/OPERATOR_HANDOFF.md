@@ -98,6 +98,36 @@ command:
 
 `EACCES`／`EPERM` 表示該容器使用者的檔案／父路徑讀取權限不足；`ENOENT`／`ENOTDIR` 表示容器路徑不存在或掛載不符；`regularFile: false` 表示掛載不是 regular file。若 regularFile/readable 都是 true 且 bytes 不超標，再檢查 JSON 語法與 object 格式。
 
+### UID10001 出現 EACCES：建立專用設定副本
+
+已收到操作員在 NAS 的 `{ uid: 10001, code: 'EACCES' }` 結果。[Synology 官方說明](https://kb.synology.com/en-global/DSM/tutorial/Revert_to_Windows_ACL_permission)指出 chmod 會將既有檔案／目錄的 Windows ACL 轉成 Unix 權限。因此保留現有部署檔案，以新建的專用 runtime 目錄與副本設定 Unix 權限，原本的 NAS 文件 ACL 不更動。
+
+由操作員在 Docker host 的管理終端執行，或在 DSM [工作排程器](https://kb.synology.com/en-global/DSM/help/DSM/AdminCenter/system_taskscheduler?version=7)建立使用者自訂指令，以 root 手動執行一次，停用排程。root 僅用於準備新副本；Web 保持 `10001:10001`。先停止 Project。以下 source 換成你現有的專用部署目錄；範例 Google 檔名需與你的現有檔案一致。
+
+```sh
+set -eu
+PORTAL_JSON_SOURCE='/volume1/docker/openpencil-viewer/private'
+PORTAL_JSON_RUNTIME="$PORTAL_JSON_SOURCE/runtime-private"
+for PORTAL_JSON_NAME in config.json directory.json google-oauth.json; do
+  test -f "$PORTAL_JSON_SOURCE/$PORTAL_JSON_NAME"
+  test ! -L "$PORTAL_JSON_SOURCE/$PORTAL_JSON_NAME"
+done
+# 不覆寫既有目錄；已存在時 mkdir 會退出。
+mkdir "$PORTAL_JSON_RUNTIME"
+chmod 0700 "$PORTAL_JSON_RUNTIME"
+for PORTAL_JSON_NAME in config.json directory.json google-oauth.json; do
+  cp "$PORTAL_JSON_SOURCE/$PORTAL_JSON_NAME" "$PORTAL_JSON_RUNTIME/$PORTAL_JSON_NAME"
+  chown 0:10001 "$PORTAL_JSON_RUNTIME/$PORTAL_JSON_NAME"
+  chmod 0640 "$PORTAL_JSON_RUNTIME/$PORTAL_JSON_NAME"
+done
+```
+
+僅將三個 JSON bind 的 source 改成新副本路徑，target、read_only 和 environment 不變；繼續掛個別檔案，不掛 runtime-private 目錄本身。host 的 root-owned 0700 父目錄限制其他 NAS 使用者，單一被掛的 root:10001／0640 檔案供容器 GID10001 讀取。不要修改 `/data/designs` 的 NAS host source。
+
+先重新建立 metadata 診斷容器，確認 regularFile/readable 為 true，再改成 `command: ['node', 'dist/api/check-config.js']` 檢查 config 和 OAuth。若新副本仍 EACCES，提供不含 JSON 內容的 owner/group/mode、失敗階段及掛載資訊，核對該 NAS 的實際權限語意；不要移除整個共享資料夾的 ACL。
+
+state 使用原本的專用 bind；不要為解設定檔錯誤重建或清空已有 SQLite。若正式啟動接著遇到 state 權限錯誤，另行核對其 owner/mode/ACL 與現有資料，不能以新空 state 丟掉 identity lifecycle 綁定。
+
 執行 `dist/api/check-config.js` 時，成功檢查會輸出 `configuration: valid`、`releaseReady: false` 並 **exit 2**；這是 strict 尚未通過 NAS 驗收的預期結果。設定錯誤為 exit 1。完成後移除暫時的 `command`，恢復 `restart: unless-stopped`，重新建立該隔離測試 Project。正常啟動後 `/health/live` 應為 200、`/health/ready` 仍為 503。修復這個設定檔錯誤不會啟用 NAS 身份或 ACL provider。
 
 ## 先啟動隔離測試容器
@@ -147,9 +177,15 @@ Compose 版本用 `.env.example` 裡的非秘密 host settings，設定 `GOOGLE_
 
 NAS directory 未就緒時，Google callback 可能回 `directory-unavailable`；這表示流程進到 NAS mapping 階段，仍沒有 Portal session 或文件授權。SQLite audit 的 `oidc-verified` 只記錄 Google token 驗證階段（無 email／token），不能當成 NAS acceptance。
 
+`directory-unavailable` 的具體觸發包含 directoryPath 檔案讀取失敗、JSON/schema 不符、production 的 source 不是 admin-approved，以及 snapshot 到期、observedAt 超過五分鐘未刷新或比現在超前三十秒。公用 directory.example.json 為 167 bytes，observedAt/expiresAt 都是0、principals為空，刻意拒絕身份對應。直接複製此範本會得到這個錯誤，即使 Docker mount 的 UID10001 讀取權限已修復。
+
+若錯誤是在 `/auth/google/callback` 出現，程式已完成 Google code exchange 與 token／claims 驗證才會執行 directory 與 principal resolver；其他 API 也可能回同一錯誤，僅憑 JSON 本身不能斷言這次 Google 流程成功。
+
+目前沒有自動取得 DSM 帳號/email/lifecycle 的 verified native adapter；[Portal 與 helper 通道](NAS_BRIDGE.md)已實作，未配置／未驗收的 DsmStrictAuthorization 仍拒絕。更新範本時間或手填身份無法完成 DSM 授權，也不能取代 NAS acceptance。操作員已提供 DS1821+／DSM7.4.1-90080／Container Manager24.0.2-1706、本機帳號與員工不可自改 email 的政策。此次中繼資料 probe 依最新授權直接使用 `/volume1/Gd`，由 `-e NAS_TEST_ROOT=/data/designs` 指定容器路徑，不需另建 probe 目錄；見 [NAS_PROBE](NAS_PROBE.md)。native directory schema、可信身份刷新及有效 ACL/read provider 仍待實機證據；[ACL矩陣](../ACL_ACCEPTANCE_MATRIX.md) 的權限異動與寫入拒絕測試仍使用隔離合成資料。
+
 ## 上 NAS 的手動驗收
 
-1. 在已授權的合成測試 root 手動執行 [NAS_PROBE.md](NAS_PROBE.md) 的命令；stdout 保存到 root 外的私有 evidence 目錄。提供去識別化輸出，不提供密碼、token、NAS 帳號資料庫或正式文件。
+1. 手動執行 [NAS_PROBE.md](NAS_PROBE.md) 的中繼資料命令；操作員已明確授權此次唯讀觀測使用 `/volume1/Gd`。stdout 保存到來源 root 外的私有 evidence 目錄；提供去識別化輸出，不提供密碼、token、NAS 帳號資料庫或文件內容。
 2. 記錄本機／AD／LDAP directory、普通使用者能否自行改 email、身份停用與重建識別來源。若 email 可自改，不可直接 trusted。
 3. 依 [ACL_ACCEPTANCE_MATRIX.md](../ACL_ACCEPTANCE_MATRIX.md) 比較 **A/B 各自**的 File Station／SMB 行為；管理員結果不能代替。native bridge 需按該環境實作並通過，不能用手填 allowlist 開正式文件。
 4. 在 LAN DNS／TLS 配好後完成真實 Google 登入、錯誤 Workspace、A→B、停用、snapshot 過期等驗收；將結果寫入 IMPLEMENTATION_STATUS。

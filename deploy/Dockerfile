@@ -33,6 +33,7 @@ COPY --from=dependencies /deps/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/tools/filesystem ./tools/filesystem
 COPY --from=build /app/scripts/probe-nas.py ./tools/probe-nas.py
+COPY --from=build /app/tools/nas ./tools/nas
 LABEL org.opencontainers.image.title="OpenPencil Synology LAN Portal" \
       org.opencontainers.image.version="0.1.0" \
       portal.upstream.sha="8c72b62da07ea1f7e82de84c7c837c3c78dfbf95"

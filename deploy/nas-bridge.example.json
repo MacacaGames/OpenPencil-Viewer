@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "environment": "production",
+  "socketPath": "/run/openpencil-bridge/bridge.sock",
+  "instanceId": "replace-with-verified-stable-nas-instance",
+  "providerId": "replace-with-verified-native-provider-revision",
+  "adapterPath": "/opt/openpencil-bridge/native-adapter.py",
+  "acceptancePath": "/opt/openpencil-bridge/acceptance.json",
+  "roots": [{ "id": "designs", "path": "/volume1/Gd" }],
+  "maxFileBytes": 536870912
+}

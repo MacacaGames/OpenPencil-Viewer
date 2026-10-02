@@ -25,7 +25,7 @@ export interface Principal {
 export interface DirectorySnapshot {
   version: 1
   instanceId: string
-  source: 'mock' | 'admin-approved'
+  source: 'mock' | 'admin-approved' | 'native-dsm'
   observedAt: number
   expiresAt: number
   principals: Principal[]

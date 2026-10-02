@@ -1,12 +1,12 @@
 # ADR 001 — Fail-closed DSM authorization and evidence-gated native reads
 
-Date: 2026-10-01 (Asia/Taipei). Status: accepted fail-closed boundary; native provider selection blocked pending target NAS evidence.
+Date: 2026-10-01; updated 2026-10-02 (Asia/Taipei). Status: accepted fail-closed boundary; broker transport implemented, native provider selection blocked pending target NAS evidence.
 
 ## Context
 
 The product requires Google-only Workspace authentication, a trusted unique same-email mapping to an existing NAS principal, and the principal's effective NAS permissions on each `.fig`. Google subject/email proves identity; it does not prove NAS access. A RO bind mount prevents original-file writes but grants the service account its own filesystem view. The development Mock demonstrates Portal behavior and cannot demonstrate DSM permission equivalence.
 
-No target NAS is available for M0/M3. The [File Station API documentation](https://global.download.synology.com/download/Document/Software/DeveloperGuide/Package/FileStation/All/enu/Synology_File_Station_API_Guide.pdf) ties permissions to the authenticated NAS API user. Its published `CheckPermission.write` cannot be assumed to evaluate an arbitrary Google-mapped principal's read rights. No supported arbitrary-principal API, trusted directory schema or native ACL command has been established.
+No target NAS native directory/ACL output is available for M0/M3. The operator supplied DS1821+/DSM7.4.1-90080/Container Manager24.0.2-1706, local accounts and non-editable employee email policy. The [File Station API documentation](https://global.download.synology.com/download/Document/Software/DeveloperGuide/Package/FileStation/All/enu/Synology_File_Station_API_Guide.pdf) ties permissions to the authenticated NAS API user. Its published `CheckPermission.write` cannot be assumed to evaluate an arbitrary Google-mapped principal's read rights. No supported arbitrary-principal API, trusted directory schema or native ACL command has been established.
 
 ## Decision
 
@@ -17,6 +17,8 @@ Apply authorization to list/search, counts, roots, metadata, thumbnail/cache val
 M0 provides a manual read-only metadata probe, not an authorization bridge. Native identity APIs, CLI invocations and output schemas must come from observed supported capabilities on the exact target version. No NAS commands, account changes, email edits, privilege grants, SSH, new ACLs or production deployment are authorized by this ADR.
 
 ## Native integration options awaiting evidence
+
+The Portal/broker boundary is implemented as described in [NAS_BRIDGE.md](NAS_BRIDGE.md): protected Unix socket, fresh native directory, per-record authorization and brokered streams, bound to reviewed live evidence and the current NAS/provider/root profile. The blocked adapter example is not a native DSM provider. The actual native mechanism still requires supported target evidence; this transport does not enable production.
 
 1. **Local-filesystem:** a verified native provider evaluates the mapped principal's traverse/list/read and all applicable share restrictions, then a tested root-confined opener supplies a descriptor for that same object. Approval cannot use the Web service account's `access()` result. Old-kernel fallback must retain confinement, no-follow, regular-file checks and race protection or refuse reads.
 2. **NAS-brokered-read:** a small host helper evaluates/opens/streams as the mapped native principal through a supported mechanism. Principal-isolated workers must establish correct supplementary groups, UID/GID and lowered privileges; a shared Node process must not switch identities. The helper must account for share/service restrictions, not merely POSIX reads. Expose only fixed read-only operations and configured roots via a protected local socket, or an authenticated protected LAN connection for the separate Unraid profile.

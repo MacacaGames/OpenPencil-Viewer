@@ -40,7 +40,15 @@ const schema = v.strictObject({
   maxDownloads: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(16)),
   scanIntervalMs: v.pipe(v.number(), v.integer(), v.minValue(1000)),
   googleClientId: v.optional(nonempty),
-  googleClientSecret: v.optional(nonempty)
+  googleClientSecret: v.optional(nonempty),
+  nasBridge: v.optional(
+    v.strictObject({
+      socketPath: nonempty,
+      instanceId: v.pipe(nonempty, v.maxLength(256)),
+      providerId: v.pipe(nonempty, v.maxLength(256)),
+      acceptanceSha256: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/))
+    })
+  )
 })
 export type Config = v.InferOutput<typeof schema>
 export function parseConfig(raw: unknown): Config {
@@ -72,5 +80,18 @@ export function parseConfig(raw: unknown): Config {
     (!config.googleClientId || !config.googleClientSecret)
   )
     throw new Error('missing OAuth credentials')
+  if (
+    config.nasBridge &&
+    (config.authorizationMode !== 'dsm-strict' ||
+      !config.nasBridge.socketPath.startsWith('/') ||
+      config.nasBridge.socketPath
+        .split('/')
+        .slice(1)
+        .some((p) => !p || p === '.' || p === '..') ||
+      /[\\\0]/.test(config.nasBridge.socketPath))
+  )
+    throw new Error(
+      'native bridge requires dsm-strict and a canonical absolute socket path'
+    )
   return config
 }

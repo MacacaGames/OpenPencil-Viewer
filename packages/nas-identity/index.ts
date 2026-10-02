@@ -14,30 +14,37 @@ const principalSchema = v.strictObject({
   enabled: v.boolean(),
   trustedEmail: v.boolean(),
   system: v.boolean(),
-  groups: v.array(text)
+  groups: v.pipe(v.array(text), v.maxLength(256))
 })
 const snapshotSchema = v.strictObject({
   version: v.literal(1),
   instanceId: text,
-  source: v.picklist(['mock', 'admin-approved']),
-  observedAt: v.number(),
-  expiresAt: v.number(),
-  principals: v.array(principalSchema)
+  source: v.picklist(['mock', 'admin-approved', 'native-dsm']),
+  observedAt: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  expiresAt: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  principals: v.pipe(v.array(principalSchema), v.maxLength(10000))
 })
 export function parseDirectory(data: unknown): DirectorySnapshot {
   return v.parse(snapshotSchema, data)
+}
+export function validateDirectoryFreshness(
+  snapshot: DirectorySnapshot,
+  now = Date.now()
+): void {
+  if (
+    snapshot.observedAt > now + 30000 ||
+    snapshot.expiresAt <= now ||
+    now - snapshot.observedAt > 300000 ||
+    snapshot.expiresAt > snapshot.observedAt + 300000
+  )
+    throw new AppError('directory-unavailable', 503)
 }
 export function resolvePrincipal(
   snapshot: DirectorySnapshot,
   identity: VerifiedIdentity,
   now = Date.now()
 ): Principal {
-  if (
-    snapshot.observedAt > now + 30000 ||
-    snapshot.expiresAt <= now ||
-    now - snapshot.observedAt > 300000
-  )
-    throw new AppError('directory-unavailable', 503)
+  validateDirectoryFreshness(snapshot, now)
   // Exact matching is deliberate: no aliases, +tags, dots, or guessed usernames.
   const matches = snapshot.principals.filter((p) => p.email === identity.email)
   if (matches.length !== 1) throw new AppError('identity-review-required', 403)

@@ -14,6 +14,53 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadRuntimeConfig } from '../../apps/api/runtime-config.ts'
 
+test('native bridge environment is complete, exclusive and keeps errors free of private values', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'portal-bridge-config-'))
+  const path = join(dir, 'config.json'),
+    oauth = join(dir, 'oauth.json')
+  const config = JSON.parse(readFileSync('deploy/config.example.json', 'utf8'))
+  const settings = {
+    NAS_BRIDGE_SOCKET: '/run/openpencil-bridge/bridge.sock',
+    NAS_INSTANCE_ID: 'nas',
+    NAS_PROVIDER_ID: 'provider',
+    NAS_ACCEPTANCE_SHA256: 'a'.repeat(64)
+  }
+  const env = { PORTAL_CONFIG: path, GOOGLE_OAUTH_FILE: oauth, ...settings }
+  try {
+    writeFileSync(path, JSON.stringify(config))
+    writeFileSync(
+      oauth,
+      JSON.stringify({
+        web: {
+          client_id: 'test-client',
+          client_secret: 'private-secret',
+          redirect_uris: [
+            'https://openpencil.macaca.games/auth/google/callback'
+          ]
+        }
+      })
+    )
+    const loaded = loadRuntimeConfig(env)
+    assert.equal(loaded.nasBridge?.socketPath, settings.NAS_BRIDGE_SOCKET)
+    assert.equal(
+      loaded.nasBridge?.acceptanceSha256,
+      settings.NAS_ACCEPTANCE_SHA256
+    )
+    for (const key of Object.keys(settings))
+      assert.throws(
+        () => loadRuntimeConfig({ ...env, [key]: undefined }),
+        /Choose complete native bridge/
+      )
+    writeFileSync(
+      path,
+      JSON.stringify({ ...config, nasBridge: loaded.nasBridge })
+    )
+    assert.throws(() => loadRuntimeConfig(env), /Choose complete native bridge/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('mounted JSON failures identify the cause without leaking contents or private paths', () => {
   const dir = mkdtempSync(join(tmpdir(), 'portal-private-config-'))
   const configPath = join(dir, 'config.json'),

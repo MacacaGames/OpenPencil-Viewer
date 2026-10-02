@@ -3,7 +3,7 @@ import { DsmStrictAuthorization } from '../packages/authorization/index.ts'
 const provider = new DsmStrictAuthorization()
 if (!provider.ready()) {
   console.error(
-    'BLOCKED: dsm-strict has no validated native evaluator. Run the manual M0 probe on an authorized isolated NAS, implement the supported bridge, then execute every applicable live ACL_ACCEPTANCE_MATRIX case. Mock tests cannot satisfy this gate.'
+    'BLOCKED: bridge transport is implemented, but no validated DSM native adapter or live acceptance runner exists. Collect the supported target-native identity/ACL schema, implement the adapter, then run every applicable live ACL_ACCEPTANCE_MATRIX case on isolated synthetic fixtures. The authorized existing-source metadata probe and Mock tests cannot satisfy this gate.'
   )
   process.exitCode = 2
 } else {

@@ -9,8 +9,13 @@ try {
         origin: config.origin,
         hostedDomains: config.allowedHostedDomains,
         authorization: config.authorizationMode,
+        nativeBridgeConfigured: Boolean(config.nasBridge),
         releaseReady: new DsmStrictAuthorization().ready(),
-        blockingReasons: ['native-dsm-provider-not-validated'],
+        blockingReasons: [
+          config.nasBridge
+            ? 'native-bridge-live-acceptance-not-checked'
+            : 'native-dsm-provider-not-validated'
+        ],
         checksNotRun: [
           'live-google',
           'live-nas-identity-acl',

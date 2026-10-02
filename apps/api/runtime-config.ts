@@ -88,6 +88,24 @@ export function loadRuntimeConfig(env: Environment = process.env): Config {
     raw.allowedHostedDomains = env.GOOGLE_HOSTED_DOMAINS.split(',').map((d) =>
       d.trim()
     )
+  const bridgeValues = [
+    env.NAS_BRIDGE_SOCKET,
+    env.NAS_INSTANCE_ID,
+    env.NAS_PROVIDER_ID,
+    env.NAS_ACCEPTANCE_SHA256
+  ]
+  if (bridgeValues.some((value) => value !== undefined)) {
+    if (bridgeValues.some((value) => !value) || raw.nasBridge !== undefined)
+      throw new Error(
+        'Choose complete native bridge environment settings or JSON settings, not both'
+      )
+    raw.nasBridge = {
+      socketPath: env.NAS_BRIDGE_SOCKET,
+      instanceId: env.NAS_INSTANCE_ID,
+      providerId: env.NAS_PROVIDER_ID,
+      acceptanceSha256: env.NAS_ACCEPTANCE_SHA256
+    }
+  }
 
   let clientId = env.GOOGLE_CLIENT_ID,
     clientSecret = env.GOOGLE_CLIENT_SECRET

@@ -44,3 +44,24 @@ test('production requires Google HTTPS + dsm-strict; unknown fields, unsafe root
     })
   )
 })
+
+test('native bridge configuration needs strict mode, canonical socket and a pinned evidence digest', () => {
+  const nasBridge = {
+    socketPath: '/run/openpencil-bridge/bridge.sock',
+    instanceId: 'nas',
+    providerId: 'verified-provider',
+    acceptanceSha256: 'a'.repeat(64)
+  }
+  assert.deepEqual(parseConfig({ ...base, nasBridge }).nasBridge, nasBridge)
+  for (const change of [
+    { socketPath: 'relative.sock' },
+    { socketPath: '/run/../bridge.sock' },
+    { socketPath: '/run//bridge.sock' },
+    { acceptanceSha256: '' },
+    { acceptanceSha256: 'accept-all' },
+    { insecure: true }
+  ])
+    assert.throws(() =>
+      parseConfig({ ...base, nasBridge: { ...nasBridge, ...change } })
+    )
+})

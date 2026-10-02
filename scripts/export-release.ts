@@ -69,6 +69,10 @@ cpSync(
   resolve(root, 'scripts/probe-nas.py'),
   resolve(destination, 'scripts/probe-nas.py')
 )
+cpSync(resolve(root, 'tools/nas'), resolve(destination, 'tools/nas'), {
+  recursive: true,
+  filter: (source) => !source.includes('__pycache__')
+})
 cpSync(
   resolve(root, 'tests/container'),
   resolve(destination, 'tests/container'),
