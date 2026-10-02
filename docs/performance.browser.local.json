@@ -1,0 +1,29 @@
+{
+  "kind": "localhost-mock-routed-real-fixture-browser",
+  "rows": [
+    {
+      "fixtureOrdinal": 1,
+      "bytes": 167558,
+      "pages": 1,
+      "clickToNativeUIReadyMs": 1060
+    },
+    {
+      "fixtureOrdinal": 2,
+      "bytes": 9108449,
+      "pages": 1,
+      "clickToNativeUIReadyMs": 6229
+    },
+    {
+      "fixtureOrdinal": 3,
+      "bytes": 409977351,
+      "pages": 3,
+      "clickToNativeUIReadyMs": 11049
+    }
+  ],
+  "notMeasured": [
+    "NAS authorization",
+    "NAS disk/LAN",
+    "GPU memory",
+    "visual fidelity"
+  ]
+}

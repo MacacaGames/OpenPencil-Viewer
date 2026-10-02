@@ -1,0 +1,4 @@
+# Unified patches contain a mandatory space prefix on blank context lines.
+# Check added source whitespace with git apply --check --whitespace=error instead.
+patches/open-pencil/*.patch whitespace=-blank-at-eol
+*.fig binary

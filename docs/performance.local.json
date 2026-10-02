@@ -1,0 +1,43 @@
+{
+  "kind": "synthetic-sparse-raw-transport-only",
+  "at": "2026-10-01T16:33:08.650Z",
+  "node": "v22.23.3",
+  "platform": "darwin",
+  "arch": "arm64",
+  "metadataEntries": 1004,
+  "scanMs": 52.8,
+  "rows": [
+    {
+      "mib": 50,
+      "bytes": 52428800,
+      "firstByteMs": 38.3,
+      "totalMs": 70.2,
+      "throughputMiBps": 712.6,
+      "parentPeakRSSMiB": 115.3
+    },
+    {
+      "mib": 200,
+      "bytes": 209715200,
+      "firstByteMs": 36.3,
+      "totalMs": 116.7,
+      "throughputMiBps": 1714.5,
+      "parentPeakRSSMiB": 117.5
+    },
+    {
+      "mib": 500,
+      "bytes": 524288000,
+      "firstByteMs": 37.6,
+      "totalMs": 203.9,
+      "throughputMiBps": 2452.6,
+      "parentPeakRSSMiB": 125
+    }
+  ],
+  "notMeasured": [
+    "real FIG decode/layout/GPU",
+    "browser RSS",
+    "reader child RSS",
+    "physical NAS disk",
+    "LAN/proxy",
+    "representative files"
+  ]
+}

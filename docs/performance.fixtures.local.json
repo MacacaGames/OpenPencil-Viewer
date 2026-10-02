@@ -1,0 +1,122 @@
+{
+  "kind": "operator-approved-real-fixtures-local-only",
+  "at": "2026-10-02",
+  "nativeFormatGraph": [
+    {
+      "kind": "local-real-fig-format-graph-only",
+      "bytes": 167558,
+      "safetyMs": 13,
+      "parseMs": 33.9,
+      "pages": 1,
+      "nodes": 322,
+      "readonlyLocked": true,
+      "sourceUnchanged": true,
+      "peakRSSMiB": 84.5,
+      "notMeasured": ["browser layout/GPU", "NAS ACL", "NAS disk/LAN"]
+    },
+    {
+      "kind": "local-real-fig-format-graph-only",
+      "bytes": 9108449,
+      "safetyMs": 123.3,
+      "parseMs": 91.3,
+      "pages": 1,
+      "nodes": 378,
+      "readonlyLocked": true,
+      "sourceUnchanged": true,
+      "peakRSSMiB": 139.1,
+      "notMeasured": ["browser layout/GPU", "NAS ACL", "NAS disk/LAN"]
+    },
+    {
+      "kind": "local-real-fig-format-graph-only",
+      "bytes": 409977351,
+      "safetyMs": 2599.4,
+      "parseMs": 302.1,
+      "pages": 3,
+      "nodes": 1586,
+      "readonlyLocked": true,
+      "sourceUnchanged": true,
+      "peakRSSMiB": 1843.2,
+      "notMeasured": ["browser layout/GPU", "NAS ACL", "NAS disk/LAN"]
+    }
+  ],
+  "containerReads": {
+    "kind": "operator-approved-ro-fixture-linux-read",
+    "platform": "aarch64",
+    "fileCount": 3,
+    "rows": [
+      {
+        "bytes": 167558,
+        "sha256": "29d60fa57e599bd751fe54737c8790e6c0be50ef1d17ccc5bffc5981b15d5f01",
+        "mtimeNs": 1790676692197940032,
+        "firstByteMs": 0.19,
+        "totalMs": 0.37,
+        "fixtureOrdinal": 1
+      },
+      {
+        "bytes": 409977351,
+        "sha256": "d589fcbfd9c6fb7ad10f10f03fe24ca5321d4809af2c126bff146064f17bdde9",
+        "mtimeNs": 1790779131940276188,
+        "firstByteMs": 0.11,
+        "totalMs": 356.68,
+        "fixtureOrdinal": 2
+      },
+      {
+        "bytes": 9108449,
+        "sha256": "1a85e61694f21ce6f0d9aae6a6b0ec51d9300051eb4675714055da552272092d",
+        "mtimeNs": 1790770717532265201,
+        "firstByteMs": 0.1,
+        "totalMs": 9.89,
+        "fixtureOrdinal": 3
+      }
+    ],
+    "notMeasured": [
+      "DSM ACL",
+      "native decode/layout/GPU",
+      "NAS physical disk",
+      "LAN transfer"
+    ]
+  },
+  "amd64EmulatedReads": {
+    "kind": "operator-approved-ro-fixture-linux-read",
+    "platform": "x86_64",
+    "fileCount": 3,
+    "rows": [
+      {
+        "bytes": 167558,
+        "sha256": "29d60fa57e599bd751fe54737c8790e6c0be50ef1d17ccc5bffc5981b15d5f01",
+        "mtimeNs": 1790676692197940032,
+        "firstByteMs": 0.27,
+        "totalMs": 2.49,
+        "fixtureOrdinal": 1
+      },
+      {
+        "bytes": 409977351,
+        "sha256": "d589fcbfd9c6fb7ad10f10f03fe24ca5321d4809af2c126bff146064f17bdde9",
+        "mtimeNs": 1790779131940276188,
+        "firstByteMs": 0.13,
+        "totalMs": 1016.36,
+        "fixtureOrdinal": 2
+      },
+      {
+        "bytes": 9108449,
+        "sha256": "1a85e61694f21ce6f0d9aae6a6b0ec51d9300051eb4675714055da552272092d",
+        "mtimeNs": 1790770717532265201,
+        "firstByteMs": 0.12,
+        "totalMs": 22.74,
+        "fixtureOrdinal": 3
+      }
+    ],
+    "notMeasured": [
+      "DSM ACL",
+      "native decode/layout/GPU",
+      "NAS physical disk",
+      "LAN transfer"
+    ]
+  },
+  "sourceWriteAttempts": 0,
+  "limitations": [
+    "No browser GPU/fidelity measurement",
+    "No NAS DSM identity/ACL/disk/reboot",
+    "No LAN content streaming because strict denies"
+  ]
+}

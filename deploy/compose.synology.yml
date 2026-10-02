@@ -1,0 +1,47 @@
+name: openpencil-lan
+services:
+  portal:
+    image: ${PORTAL_IMAGE:?set an immutable tested image digest}
+    user: '10001:10001'
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    environment:
+      PORTAL_CONFIG: /config/config.json
+      GOOGLE_OAUTH_FILE: /run/secrets/google-oauth.json
+      PORTAL_ORIGIN: ${PORTAL_ORIGIN:?set the exact HTTPS origin}
+      GOOGLE_HOSTED_DOMAINS: ${GOOGLE_HOSTED_DOMAINS:?set the Workspace hd domain}
+    ports: ['${PORTAL_BIND_ADDRESS:-127.0.0.1}:${PORTAL_HOST_PORT:-3210}:3000']
+    volumes:
+      - type: bind
+        source: ${GOOGLE_OAUTH_JSON:?set the private Google Web OAuth client JSON path}
+        target: /run/secrets/google-oauth.json
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${PORTAL_CONFIG_JSON:?set the administrator-owned Portal config JSON}
+        target: /config/config.json
+        read_only: true
+        bind: { create_host_path: false, propagation: rprivate }
+      - type: bind
+        source: ${PORTAL_DIRECTORY_JSON:?set the trusted NAS directory JSON}
+        target: /config/directory.json
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${NAS_TEST_ROOT:?set an isolated test subdirectory until live acceptance passes}
+        target: /data/designs
+        read_only: true
+        bind: { create_host_path: false, propagation: rprivate }
+      - type: bind
+        source: ${PORTAL_STATE_DIR:?set a dedicated local SQLite state directory}
+        target: /state
+        bind: { create_host_path: false }
+    tmpfs: ['/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777']
+    pids_limit: 128
+    mem_limit: 4g
+    cpus: 2.0
+    stop_grace_period: 20s
+    logging: { driver: json-file, options: { max-size: '10m', max-file: '3' } }

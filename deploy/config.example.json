@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "mode": "read-only",
+  "environment": "production",
+  "origin": "https://openpencil.macaca.games",
+  "host": "0.0.0.0",
+  "port": 3000,
+  "identityProvider": "google-oidc",
+  "authorizationMode": "dsm-strict",
+  "allowedHostedDomains": ["macaca.games"],
+  "statePath": "/state/portal.sqlite",
+  "directoryPath": "/config/directory.json",
+  "webPath": "/app/dist/web",
+  "roots": [{ "id": "designs", "label": "Designs", "path": "/data/designs" }],
+  "maxFileBytes": 536870912,
+  "maxDownloads": 4,
+  "scanIntervalMs": 60000
+}

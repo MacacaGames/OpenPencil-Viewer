@@ -1,0 +1,583 @@
+--- a/src/router.ts
++++ b/src/router.ts
+@@ -1,14 +1,13 @@
+ import { createRouter, createWebHistory } from 'vue-router'
+ 
+-import WorkspaceView from './views/WorkspaceView.vue'
++import WorkspaceView from './views/PortalWorkspace.vue'
+ 
+ const router = createRouter({
+   history: createWebHistory(),
+   routes: [
+     { path: '/', component: WorkspaceView },
+     { path: '/storage', redirect: '/' },
+-    { path: '/demo', component: WorkspaceView, meta: { demo: true } },
+-    { path: '/share/:roomId', component: WorkspaceView }
++    { path: '/editor', component: WorkspaceView }
+   ]
+ })
+ 
+--- a/src/boot.ts
++++ b/src/boot.ts
+@@ -7,7 +7,6 @@
+ import { preloadFonts } from '@/app/editor/fonts'
+ import { observeBootErrors } from '@/app/shell/support/boot'
+ import { reportBootFailure } from '@/app/shell/support/gate'
+-import { IS_TAURI } from '@/constants'
+ 
+ import App from './App.vue'
+ import router from './router'
+@@ -32,10 +31,5 @@
+     return
+   }
+ 
+-  if (!IS_TAURI) {
+-    void import('virtual:pwa-register').then(({ registerSW }) => {
+-      registerSW({ immediate: true })
+-      return undefined
+-    })
+-  }
++
+ }
+--- a/src/App.vue
++++ b/src/App.vue
+@@ -12,19 +12,13 @@
+ import { animationsEnabled } from '@/app/shell/motion'
+ import { useAppTheme } from '@/app/shell/theme'
+ import { toast } from '@/app/shell/ui'
+-import { scheduleStartupUpdateCheck } from '@/app/shell/updater'
+-import { kickSyncEngine } from '@/app/storage/sync'
+ import { prepareForReload } from '@/app/tabs'
+ import UnsavedChangesDialog from '@/components/document/UnsavedChangesDialog.vue'
+-import PublishLibraryDialog from '@/components/libraries/PublishLibraryDialog.vue'
+-import LibraryUpdateReviewDialog from '@/components/libraries/review/LibraryUpdateReviewDialog.vue'
+-import RecoveryDialog from '@/components/recovery/RecoveryDialog.vue'
+-import SettingsDialog from '@/components/settings/SettingsDialog.vue'
+ import AppShell from '@/components/shell/AppShell.vue'
+ import Toaster from '@/components/shell/Toaster.vue'
+ 
+ const store = useEditorStore()
+-const { updates, locale } = useI18n()
++const { locale } = useI18n()
+ 
+ useHead({
+   titleTemplate: (title) => (title ? `${title} — OpenPencil` : 'OpenPencil'),
+@@ -43,8 +37,6 @@
+ 
+ onMounted(() => {
+   toast.setupGlobalErrorHandler()
+-  scheduleStartupUpdateCheck(updates)
+-  void kickSyncEngine()
+ })
+ </script>
+ 
+@@ -54,11 +46,7 @@
+       <AppShell>
+         <RouterView />
+       </AppShell>
+-      <SettingsDialog />
+-      <RecoveryDialog />
+       <UnsavedChangesDialog />
+-      <PublishLibraryDialog />
+-      <LibraryUpdateReviewDialog />
+       <Toaster />
+     </TooltipProvider>
+   </MotionConfig>
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -15,10 +15,8 @@
+ import {
+   localAutomationRoute,
+   localAutomationToken,
+-  openPencilAutomationPlugin
+ } from './vite/automation'
+ import { copyCanvasKitAssetsPlugin } from './vite/canvaskit-assets'
+-import { openPencilPwaPlugin } from './vite/pwa'
+ import { rawMarkdownPlugin } from './vite/raw-markdown'
+ import { createDevServerOptions } from './vite/server'
+ 
+@@ -45,9 +43,9 @@
+       tailwindcss(),
+       Icons({ compiler: 'vue3' }),
+       Components({ resolvers: [IconsResolver({ prefix: 'icon' })] }),
+-      openPencilAutomationPlugin(command, host),
++
+       vue(),
+-      openPencilPwaPlugin()
++
+     ],
+     clearScreen: false,
+     build: {
+--- a/src/app/document/io/source.ts
++++ b/src/app/document/io/source.ts
+@@ -12,7 +12,6 @@
+ import { createDocumentSourceState } from '@/app/document/io/source-state'
+ import type { DocumentSourceAccess } from '@/app/document/io/types'
+ import { createDocumentRecovery } from '@/app/document/recovery'
+-import { recoveryEnabled } from '@/app/document/recovery/preferences'
+ import type { StorageDocumentBinding } from '@/app/integrations/storage/types'
+ 
+ type DocumentSourceState = EditorState & {
+@@ -51,13 +50,6 @@
+ }: DocumentSourceOptions) {
+   const changes = createDocumentChanges(editor)
+ 
+-  async function saveAndTrack(save: () => Promise<boolean>) {
+-    const revision = changes.capture()
+-    const saved = await save()
+-    if (saved) changes.markSaved(revision)
+-    return saved
+-  }
+-
+   function buildFigFile() {
+     const renderer = getRenderer()
+     return exportFigFile(editor.graph, renderer?.ck, renderer ?? undefined, state.currentPageId)
+@@ -69,12 +61,12 @@
+ 
+   const recovery = createDocumentRecovery({
+     state,
+-    isEnabled: () => recoveryEnabled.value,
++    isEnabled: () => false,
+     buildFigFile: buildRecoveryFigFile,
+-    hasWritableSource: () => !!getFileHandle() || !!getFilePath() || !!getStorageBinding()
++    hasWritableSource: () => false
+   })
+ 
+-  const { saveFigFile, saveFigFileAs, writeFile } = createSaveActions({
++  const { writeFile } = createSaveActions({
+     state,
+     buildFigFile,
+     getFilePath,
+@@ -98,7 +90,7 @@
+   const autosave = createAutosave({
+     state,
+     getSavedVersion,
+-    hasWritableSource: () => !!getFileHandle() || !!getFilePath() || !!getStorageBinding(),
++    hasWritableSource: () => false,
+     saveCurrentDocument: async (version) => {
+       const revision = changes.capture()
+       const data = await buildFigFile()
+@@ -168,9 +160,9 @@
+     setPlannedFilePath,
+     startWatchingCurrentFile,
+     disposeDocumentIO,
+-    saveFigFile: () => saveAndTrack(saveFigFile),
+-    saveFigFileAs: () => saveAndTrack(saveFigFileAs),
+-    hasUnsavedChanges: changes.hasUnsavedChanges,
++    saveFigFile: async () => false,
++    saveFigFileAs: async () => false,
++    hasUnsavedChanges: () => false,
+     markDocumentSaved: changes.markSaved,
+     getStorageBinding,
+     getRecoveryId: () => recovery.getRecoveryId(),
+@@ -178,7 +170,7 @@
+       changes.markChanged()
+       return recovery.adoptRecoverySnapshot(id, version)
+     },
+-    persistRecoveryNow: () => recovery.persistNow(),
++    persistRecoveryNow: async () => undefined,
+     discardRecovery: () => recovery.discardRecovery()
+   }
+ }
+--- a/packages/core/src/editor/create.ts
++++ b/packages/core/src/editor/create.ts
+@@ -1,3 +1,4 @@
++import { guardEditor } from "../../../../portal/upstream-adapter/readonly"
+ import type { CanvasKit } from 'canvaskit-wasm'
+ import { createNanoEvents } from 'nanoevents'
+ import type { Emitter } from 'nanoevents'
+@@ -290,7 +291,7 @@
+     clearLazyFigImportContext(_graph)
+   }
+ 
+-  return {
++  const editor = {
+     get graph() {
+       return _graph
+     },
+@@ -372,6 +373,7 @@
+     // Structure — bridge functions that need selectedNodes
+     ...structureBridge
+   }
++  return guardEditor(editor, () => _graph)
+ }
+ 
+ export type Editor = ReturnType<typeof createEditor>
+--- a/src/app/editor/session/create.ts
++++ b/src/app/editor/session/create.ts
+@@ -1,3 +1,4 @@
++import { guardAppEditor } from "../../../../portal/upstream-adapter/app-guard"
+ import { shallowReactive } from 'vue'
+ 
+ import { createEditor } from '@open-pencil/core/editor'
+@@ -240,7 +241,7 @@
+ 
+   defineEditorStoreAccessors(store, editor)
+ 
+-  return store
++  return guardAppEditor(store)
+ }
+ 
+ export type EditorStore = ReturnType<typeof createEditorStore>
+--- a/packages/core/src/io/formats/fig/read.ts
++++ b/packages/core/src/io/formats/fig/read.ts
+@@ -15,6 +15,7 @@
+ 
+ export interface ParseFigFileOptions {
+   populate?: 'all' | 'first-page' | 'none'
++  allowMainThreadFallback?: boolean
+   onPages?: (pages: readonly FigPageManifestEntry[]) => void
+   signal?: AbortSignal
+ }
+@@ -125,7 +126,7 @@
+     try {
+       return await parseViaWorker(buffer, options)
+     } catch (error) {
+-      if (options.signal?.aborted) throw error
++      if (options.signal?.aborted || options.allowMainThreadFallback === false) throw error
+       console.warn('Worker parsing failed, falling back to main thread:', error)
+       const graph = parseFigFileSync(copy, options)
+       registerOriginalArchiveRequest(graph, async () => new Uint8Array(copy.slice(0)))
+--- a/packages/vue/src/editor/commands/use.ts
++++ b/packages/vue/src/editor/commands/use.ts
+@@ -1,3 +1,4 @@
++import { isReadonlyGraph } from "../../../../../portal/upstream-adapter/readonly"
+ import { useStore } from '@nanostores/vue'
+ import { computed } from 'vue'
+ 
+@@ -56,6 +57,14 @@
+     getOpacityTarget: () => opacityTarget
+   })
+ 
++  for (const [id, command] of Object.entries(commands)) {
++    const run = command.run
++    const enabled = command.enabled
++    const safe = id.startsWith("view.") || ["selection.selectAll", "selection.selectInverse", "selection.goToMainComponent"].includes(id)
++    command.enabled = computed(() => (!isReadonlyGraph(editor.graph) || safe) && enabled.value)
++    command.run = () => { if (!isReadonlyGraph(editor.graph) || safe) run() }
++  }
++
+   return {
+     commands,
+     otherPages,
+--- a/packages/vue/src/editor/selection-state/nodes.ts
++++ b/packages/vue/src/editor/selection-state/nodes.ts
+@@ -1,3 +1,4 @@
++import { cloneReadonlyValue } from "../../../../../portal/upstream-adapter/readonly"
+ import { tryOnScopeDispose, watchImmediate } from '@vueuse/core'
+ import { computed, shallowReactive, shallowRef } from 'vue'
+ import type { ComputedRef, Ref } from 'vue'
+@@ -31,7 +32,7 @@
+     void revision.value
+     void editor.state.sceneVersion
+     void editor.state.currentPageId
+-    return editor.getSelectedNodes().map((node) => shallowReactive(structuredClone(node)))
++    return editor.getSelectedNodes().map((node) => shallowReactive(cloneReadonlyValue(node)))
+   })
+   const byId = computed(() => new Map(nodes.value.map((node) => [node.id, node])))
+   const node = computed(() => (nodes.value.length === 1 ? nodes.value[0] : null))
+--- a/src/app/collab/use.ts
++++ b/src/app/collab/use.ts
+@@ -1,83 +1,5 @@
+-import { tryOnScopeDispose, useLocalStorage } from '@vueuse/core'
+-import { computed, ref } from 'vue'
+-
+-import { createFollowActions, generateRoomId } from '@/app/collab/awareness'
+-import { createLocalAwarenessActions } from '@/app/collab/local-awareness'
+-import {
+-  createCollabConnectionActions,
+-  createCollabRuntime,
+-  createInitialCollabState
+-} from '@/app/collab/session'
+-import { DEFAULT_COLLAB_STATE, type CollabState, type RemotePeer } from '@/app/collab/types'
+-import { createYjsGraphSync } from '@/app/collab/yjs-sync'
+-import type { EditorStore } from '@/app/editor/active-store'
+-
+-export { COLLAB_KEY, useCollabInjected } from '@/app/collab/context'
+-export { DEFAULT_COLLAB_STATE }
+-export type { CollabState, RemotePeer }
+-
+-export function useCollab(storeOrGetter: EditorStore | (() => EditorStore)) {
+-  const getStore = () =>
+-    typeof storeOrGetter === 'function' ? (storeOrGetter as () => EditorStore)() : storeOrGetter
+-  const storedName = useLocalStorage('op-collab-name', '')
+-  const state = ref<CollabState>(createInitialCollabState(storedName.value))
+-  const runtime = createCollabRuntime()
+-  const remotePeers = computed(() => state.value.peers)
+-  const getActiveStore = () => runtime.connectedStore ?? getStore()
+-
+-  const { followingPeer, followPeer, resetFollow, tickFollow } = createFollowActions(
+-    getActiveStore,
+-    () => runtime.awareness
+-  )
+-  const { broadcastAwareness, updateCursor, updateSelection, updatePeersList, setLocalName } =
+-    createLocalAwarenessActions({
+-      state,
+-      storedName,
+-      getStore: getActiveStore,
+-      getAwareness: () => runtime.awareness
+-    })
+-
+-  const { syncNodeToYjs, syncAllNodesToYjs, applyYjsToGraph } = createYjsGraphSync({
+-    getStore: getActiveStore,
+-    getYdoc: () => runtime.ydoc,
+-    getYnodes: () => runtime.ynodes,
+-    getYimages: () => runtime.yimages,
+-    setSuppressYjsEvents: (value) => {
+-      runtime.suppressYjsEvents = value
+-    }
+-  })
+-  const { connect, disconnect } = createCollabConnectionActions({
+-    runtime,
+-    state,
+-    getStore,
+-    updatePeersList,
+-    tickFollow,
+-    broadcastAwareness,
+-    applyYjsToGraph,
+-    syncNodeToYjs,
+-    resetFollow
+-  })
+-
+-  function shareCurrentDoc(): string {
+-    const roomId = generateRoomId()
+-    connect(roomId)
+-    syncAllNodesToYjs()
+-    return roomId
+-  }
+-
+-  tryOnScopeDispose(disconnect)
+-
+-  return {
+-    state,
+-    remotePeers,
+-    followingPeer,
+-    connect,
+-    disconnect,
+-    shareCurrentDoc,
+-    updateCursor,
+-    updateSelection,
+-    setLocalName,
+-    followPeer,
+-    tickFollow
+-  }
+-}
++import { disabledCollaboration } from '../../../portal/upstream-adapter/collab'
++export { COLLAB_KEY, useCollabInjected } from './context'
++export { DEFAULT_COLLAB_STATE } from './types'
++export type { CollabState, RemotePeer } from './types'
++export function useCollab(_storeOrGetter?: unknown) { return disabledCollaboration() }
+--- a/src/app/browser-bridge.ts
++++ b/src/app/browser-bridge.ts
+@@ -40,6 +40,7 @@
+ }
+ 
+ export function setOpenPencilStore(store: EditorStore) {
++  if (true) return
+   activeStore = store
+   if (!IS_BROWSER) return
+   const api = windowAPI()
+@@ -71,5 +72,6 @@
+ }
+ 
+ export function setOpenPencilOpenFileHandler(openFile: (path: string) => Promise<void>) {
++  if (true) return
+   windowAPI().openFile = openFile
+ }
+--- a/src/components/editor/EditorWorkspace.vue
++++ b/src/components/editor/EditorWorkspace.vue
+@@ -12,7 +12,6 @@
+ import { activeTab } from '@/app/tabs'
+ import BrandMark from '@/components/brand/BrandMark.vue'
+ import CanvasSplitRoot from '@/components/canvas/CanvasSplitRoot.vue'
+-import CollabPanel from '@/components/CollabPanel/CollabPanel.vue'
+ import EditorCanvas from '@/components/EditorCanvas.vue'
+ import LayersPanel from '@/components/LayersPanel.vue'
+ import MobileDrawer from '@/components/MobileDrawer.vue'
+@@ -70,7 +69,7 @@
+       class="flex flex-col"
+     >
+       <div class="flex shrink-0 items-center justify-between border-b border-border px-1.5 py-1.5">
+-        <CollabPanel />
++
+       </div>
+       <PropertiesPanel />
+     </SplitterPanel>
+--- a/src/components/PropertiesPanel.vue
++++ b/src/components/PropertiesPanel.vue
+@@ -38,7 +38,7 @@
+           {{ panels.code }}
+         </TabsTrigger>
+         <TabsTrigger
+-          value="ai"
++          v-if="false" value="ai"
+           data-test-id="properties-tab-ai"
+           class="relative flex items-center gap-1 rounded px-2.5 py-1 text-[11px] text-muted hover:text-surface data-[state=active]:font-semibold data-[state=active]:text-surface after:absolute after:inset-x-2 after:-bottom-[9px] after:h-0.5 after:rounded-full after:bg-transparent data-[state=active]:after:bg-accent"
+         >
+@@ -54,7 +54,7 @@
+         :force-mount="true"
+         :hidden="activeTab !== 'design'"
+       >
+-        <DesignPanel />
++        <fieldset disabled class="flex min-h-0 flex-1 flex-col"><DesignPanel /></fieldset>
+       </TabsContent>
+ 
+       <TabsContent
+@@ -67,7 +67,7 @@
+       </TabsContent>
+ 
+       <TabsContent
+-        value="ai"
++        v-if="false" value="ai"
+         class="flex min-h-0 flex-1 flex-col"
+         :force-mount="true"
+         :hidden="activeTab !== 'ai'"
+--- a/src/components/CodePanel.vue
++++ b/src/components/CodePanel.vue
+@@ -60,7 +60,7 @@
+   { value: 'tailwind-jsx' as const, label: code.value.sourceTailwindJSX },
+   { value: 'html-css' as const, label: code.value.sourceHTMLCSS }
+ ])
+-const readOnly = computed(() => source.value === 'tailwind-jsx')
++const readOnly = computed(() => true)
+ const dirty = computed(() => draft.value !== baseline.value)
+ const editorLabel = computed(() =>
+   source.value === 'html-css' ? code.value.editorHTMLCSSLabel : code.value.editorDesignLabel
+--- a/src/components/PagesPanel.vue
++++ b/src/components/PagesPanel.vue
+@@ -53,7 +53,8 @@
+ 
+ function startRename(pg: PageItem, renamePage: (pageId: string, name: string) => void) {
+   setPageActions(renamePage)
+-  rename.start(pg.id, pg.name)
++  void pg
++  // LAN readonly: no page rename.
+ }
+ 
+ function pageDropPosition(pg: PageItem): 'before' | 'after' | undefined {
+@@ -88,7 +89,7 @@
+     <div data-test-id="pages-panel" :class="baseStyles.panel()">
+       <div :class="baseStyles.header()">
+         <span data-test-id="pages-header" :class="baseStyles.title()">{{ panels.pages }}</span>
+-        <IconButton :label="panels.addPage" data-test-id="pages-add" @click="actions.add()">
++        <IconButton :label="panels.addPage" data-test-id="pages-add" :disabled="true" @click="actions.add()">
+           <icon-lucide-plus class="size-3.5" />
+         </IconButton>
+       </div>
+--- a/src/app/editor/fonts/index.ts
++++ b/src/app/editor/fonts/index.ts
+@@ -30,7 +30,7 @@
+ 
+ export type FontProviderSettings = Record<WebFontProviderId, boolean>
+ 
+-export const onlineFontsEnabled = useLocalStorage('op-online-fonts-enabled', true)
++export const onlineFontsEnabled = useLocalStorage('op-online-fonts-enabled', false)
+ export const fontProviderSettings = useLocalStorage<FontProviderSettings>(
+   'op-font-providers',
+   DEFAULT_WEB_FONT_PROVIDER_SETTINGS
+@@ -40,7 +40,7 @@
+   [onlineFontsEnabled, fontProviderSettings],
+   () => {
+     fontManager.setOnlineFontProviders(
+-      onlineFontsEnabled.value
++      false
+         ? Object.fromEntries(
+             WEB_FONT_PROVIDER_IDS.map((provider) => [
+               provider,
+--- a/src/components/assets-panel/AssetsPanel.vue
++++ b/src/components/assets-panel/AssetsPanel.vue
+@@ -206,7 +206,7 @@
+ const selectedPreviewNodeId = computed(() => selectedAsset.value?.componentId ?? null)
+ 
+ onMounted(() => {
+-  void libraryService.refresh(editor)
++  // LAN portal: no external library refresh.
+ })
+ 
+ function clearPreview() {
+--- a/src/app/shell/menu/app-menu.ts
++++ b/src/app/shell/menu/app-menu.ts
+@@ -71,7 +71,7 @@
+ }
+ 
+ function isVisible(entry: { target?: string }): boolean {
+-  return entry.target !== 'native'
++  return false && entry.target !== 'native'
+ }
+ 
+ function isSeparator(entry: AppMenuEntry): entry is Extract<AppMenuEntry, { type: 'separator' }> {
+--- a/src/app/shell/keyboard/registry.ts
++++ b/src/app/shell/keyboard/registry.ts
+@@ -223,6 +223,7 @@
+   bindToolShortcuts(bindings, runOptions(new KeyboardEvent('keydown')))
+ 
+   for (const shortcut of shortcuts) {
++    if (["new-tab", "close-tab", "open-file", "open-settings", "toggle-ai"].includes(shortcut.id)) continue
+     bindShortcut(shortcut.global ? globalBindings : bindings, shortcut.keys, (event) => {
+       shortcut.run(runOptions(event))
+       if (shortcut.shouldPreventDefault?.(event) ?? true) event.preventDefault()
+--- a/packages/vue/src/canvas/useCanvasInput.ts
++++ b/packages/vue/src/canvas/useCanvasInput.ts
+@@ -1,3 +1,4 @@
++import { isReadonlyGraph } from "../../../../portal/upstream-adapter/readonly"
+ import { useEventListener } from '@vueuse/core'
+ import { onScopeDispose, ref, type Ref } from 'vue'
+ 
+@@ -212,11 +213,22 @@
+   }
+ 
+   function onDblClick(e: MouseEvent) {
++    if (isReadonlyGraph(editor.graph)) return
+     if (startAutoLayoutPaddingEdit(e)) return
+     onTextDblClick(e)
+   }
+ 
+   function onMouseDown(e: MouseEvent) {
++    if (!isEnabled()) return
++    if (isReadonlyGraph(editor.graph) && editor.state.activeTool === 'SELECT') {
++      onActivate?.()
++      canvasRef.value?.focus()
++      const { cx, cy } = getCoords(e)
++      const hit = hitTestFrameTitle(cx, cy) ?? hitTestComponentLabel(cx, cy) ?? hitTestSectionTitle(cx, cy) ?? editor.hitTestAtPoint(cx, cy, e.metaKey || e.ctrlKey)
++      if (hit) editor.select([hit.id], e.shiftKey)
++      else editor.clearSelection()
++      return
++    }
+     onActivate?.()
+     if (!isEnabled()) return
+     editor.setMeasurementMode('off')
+--- a/src/app/shell/keyboard/clipboard.ts
++++ b/src/app/shell/keyboard/clipboard.ts
+@@ -1,3 +1,4 @@
++import { isReadonlyGraph } from "../../../../portal/upstream-adapter/readonly"
+ import { useEventListener } from '@vueuse/core'
+ 
+ import { extractImageFilesFromClipboard } from '@open-pencil/vue'
+@@ -64,6 +65,7 @@
+   })
+ 
+   useEventListener(window, 'paste', (e: ClipboardEvent) => {
++    if (isReadonlyGraph(store.graph)) { e.preventDefault(); return }
+     if (isEditing(e)) return
+     e.preventDefault()
+ 
+--- a/src/app/document/recovery/store.ts
++++ b/src/app/document/recovery/store.ts
+@@ -83,6 +83,7 @@
+ 
+ export function getRecoveryStore(): RecoveryStore {
+   if (singleton) return singleton
++  if (typeof location !== 'undefined') { singleton = createMemoryRecoveryStore(); return singleton }
+   if (typeof indexedDB === 'undefined') {
+     warnMemoryFallback()
+     singleton = createMemoryRecoveryStore()
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -17,6 +17,7 @@
+     "noEmit": true,
+     "jsx": "preserve",
+     "strict": true,
++    "types": ["vite/client", "node"],
+     "noUnusedLocals": true,
+     "noUnusedParameters": true,
+     "noFallthroughCasesInSwitch": true,

@@ -1,0 +1,76 @@
+import * as v from 'valibot'
+const nonempty = v.pipe(v.string(), v.minLength(1))
+const schema = v.strictObject({
+  version: v.literal(1),
+  mode: v.literal('read-only'),
+  environment: v.picklist(['development', 'production']),
+  origin: v.pipe(v.string(), v.url()),
+  host: nonempty,
+  port: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535)),
+  identityProvider: v.picklist(['mock', 'google-oidc']),
+  authorizationMode: v.picklist(['mock', 'dsm-strict']),
+  allowedHostedDomains: v.pipe(
+    v.array(
+      v.pipe(
+        v.string(),
+        v.regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/)
+      )
+    ),
+    v.minLength(1)
+  ),
+  statePath: nonempty,
+  directoryPath: nonempty,
+  webPath: nonempty,
+  roots: v.pipe(
+    v.array(
+      v.strictObject({
+        id: v.pipe(v.string(), v.regex(/^[a-z0-9-]+$/)),
+        label: nonempty,
+        path: nonempty
+      })
+    ),
+    v.minLength(1)
+  ),
+  maxFileBytes: v.pipe(
+    v.number(),
+    v.integer(),
+    v.minValue(1),
+    v.maxValue(536870912)
+  ),
+  maxDownloads: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(16)),
+  scanIntervalMs: v.pipe(v.number(), v.integer(), v.minValue(1000)),
+  googleClientId: v.optional(nonempty),
+  googleClientSecret: v.optional(nonempty)
+})
+export type Config = v.InferOutput<typeof schema>
+export function parseConfig(raw: unknown): Config {
+  const config = v.parse(schema, raw)
+  const origin = new URL(config.origin)
+  if (origin.origin !== config.origin || origin.username || origin.password)
+    throw new Error('origin must be an exact origin')
+  if (
+    new Set(config.roots.map((r) => r.id)).size !== config.roots.length ||
+    config.roots.some((r) => !r.path.startsWith('/') || r.path === '/')
+  )
+    throw new Error('explicit unique absolute roots required')
+  if (
+    config.environment === 'production' &&
+    (origin.protocol !== 'https:' ||
+      config.identityProvider !== 'google-oidc' ||
+      config.authorizationMode !== 'dsm-strict')
+  )
+    throw new Error('production requires HTTPS, Google OIDC and dsm-strict')
+  if (
+    config.identityProvider === 'mock' &&
+    (!['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname) ||
+      config.environment !== 'development' ||
+      !['127.0.0.1', '::1'].includes(config.host))
+  )
+    throw new Error('mock is loopback development only')
+  if (
+    config.identityProvider === 'google-oidc' &&
+    (!config.googleClientId || !config.googleClientSecret)
+  )
+    throw new Error('missing OAuth credentials')
+  return config
+}

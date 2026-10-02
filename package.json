@@ -1,0 +1,48 @@
+{
+  "name": "openpencil-synology-lan-portal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "node": "22.23.3"
+  },
+  "scripts": {
+    "bootstrap": "node --import tsx scripts/bootstrap.ts",
+    "prepare-upstream": "node --import tsx scripts/prepare-upstream.ts",
+    "verify-upstream": "node --import tsx scripts/verify-upstream.ts",
+    "dev:mock": "node --import tsx scripts/dev.ts mock",
+    "dev:google": "node --import tsx scripts/dev.ts google",
+    "test": "node --import tsx --test tests/unit/*.test.ts tests/integration/*.test.ts",
+    "test:e2e": "playwright test",
+    "probe:nas": "python3 scripts/probe-nas.py",
+    "test:nas": "node --import tsx scripts/test-nas.ts",
+    "build": "node --import tsx scripts/build.ts",
+    "build:api": "node --import tsx scripts/build.ts --api-only",
+    "typecheck": "tsc --noEmit",
+    "typecheck:editor": "node .work/editor/node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p .work/editor/tsconfig.json",
+    "test:adapter": "node --import tsx scripts/test-adapter.ts",
+    "start": "node dist/api/server.js",
+    "benchmark": "node --import tsx scripts/benchmark.ts",
+    "fixture:create": "node --import tsx scripts/create-fixture.ts",
+    "config:check": "node --import tsx apps/api/check-config.ts",
+    "release:export": "node --import tsx scripts/export-release.ts",
+    "format:check": "prettier --check apps packages \"scripts/*.{ts,mjs}\" tests playwright.config.ts tsconfig.json package.json deploy/*.json deploy/*.yml docker-compose.yml .github/workflows/*.yml .gitlab-ci.yml"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.19.17",
+    "hono": "4.13.12",
+    "jose": "6.2.12",
+    "valibot": "1.4.2",
+    "fflate": "0.8.3",
+    "fzstd": "0.1.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "22.19.15",
+    "esbuild": "0.27.7",
+    "tsx": "4.21.0",
+    "typescript": "5.8.3",
+    "prettier": "3.8.3"
+  }
+}

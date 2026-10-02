@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "apps/api/**/*.ts",
+    "packages/contracts/**/*.ts",
+    "packages/nas-identity/**/*.ts",
+    "packages/authorization/**/*.ts",
+    "packages/filesystem/**/*.ts",
+    "packages/transport/**/*.ts",
+    "scripts/**/*.ts",
+    "tests/unit/**/*.ts",
+    "tests/integration/**/*.ts",
+    "tests/e2e/**/*.ts",
+    "playwright.config.ts"
+  ],
+  "exclude": [".work", "upstream", "node_modules"]
+}

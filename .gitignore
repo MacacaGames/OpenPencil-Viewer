@@ -1,0 +1,15 @@
+node_modules/
+.work/
+.tools/
+dist/
+test-results/
+playwright-report/
+.env*
+!.env.example
+*.sqlite*
+.DS_Store
+__pycache__/
+deploy/config.json
+deploy/directory.json
+deploy/google-oauth.json
+**/client_secret*.json

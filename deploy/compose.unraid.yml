@@ -1,0 +1,17 @@
+# Explicitly blocked: remote SMB/NFS mount semantics and NAS authorization
+# have not been tested. Do not replace the same-NAS source path silently.
+name: openpencil-unraid-blocked
+services:
+  portal:
+    image: ${PORTAL_IMAGE:?set a tested image digest}
+    profiles: [unraid-blocked]
+    entrypoint:
+      [
+        node,
+        -e,
+        "console.error('BLOCKED: Unraid remote-mount, identity and NAS broker acceptance required'); process.exit(2)"
+      ]
+    user: '10001:10001'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

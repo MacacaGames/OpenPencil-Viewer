@@ -1,0 +1,7 @@
+# Conventional entry point, sharing the same audited Synology service definition.
+name: openpencil-lan
+services:
+  portal:
+    extends:
+      file: ./deploy/compose.synology.yml
+      service: portal
