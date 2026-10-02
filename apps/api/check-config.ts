@@ -9,12 +9,15 @@ try {
         origin: config.origin,
         hostedDomains: config.allowedHostedDomains,
         authorization: config.authorizationMode,
+        sharedBrowseValidation: config.authorizationMode === 'google-mount',
         nativeBridgeConfigured: Boolean(config.nasBridge),
         releaseReady: new DsmStrictAuthorization().ready(),
         blockingReasons: [
-          config.nasBridge
-            ? 'native-bridge-live-acceptance-not-checked'
-            : 'native-dsm-provider-not-validated'
+          config.authorizationMode === 'google-mount'
+            ? 'shared-browse-validation-does-not-enforce-dsm-acl'
+            : config.nasBridge
+              ? 'native-bridge-live-acceptance-not-checked'
+              : 'native-dsm-provider-not-validated'
         ],
         checksNotRun: [
           'live-google',
@@ -27,7 +30,7 @@ try {
       2
     )
   )
-  process.exitCode = 2
+  process.exitCode = config.authorizationMode === 'google-mount' ? 0 : 2
 } catch (error) {
   console.error(
     error instanceof Error ? error.message : 'Configuration unavailable'

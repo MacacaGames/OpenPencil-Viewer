@@ -1,4 +1,9 @@
-import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose'
+import {
+  createRemoteJWKSet,
+  jwtVerify,
+  type JWTVerifyGetKey,
+  type JWTPayload
+} from 'jose'
 import { createHash } from 'node:crypto'
 import { AppError } from '../../packages/contracts/index.ts'
 import { checkIdentityClaims } from '../../packages/nas-identity/index.ts'
@@ -15,23 +20,28 @@ export async function verifyGoogleToken(
 ) {
   if (!config.googleClientId || !nonce)
     throw new AppError('oidc-configuration-invalid', 503)
-  const { payload } = await jwtVerify(token, keys, {
-    issuer: ['https://accounts.google.com', 'accounts.google.com'],
-    audience: config.googleClientId,
-    algorithms: ['RS256'],
-    requiredClaims: [
-      'exp',
-      'iat',
-      'sub',
-      'aud',
-      'iss',
-      'nonce',
-      'email',
-      'email_verified',
-      'hd'
-    ],
-    clockTolerance: 5
-  })
+  let payload: JWTPayload
+  try {
+    ;({ payload } = await jwtVerify(token, keys, {
+      issuer: ['https://accounts.google.com', 'accounts.google.com'],
+      audience: config.googleClientId,
+      algorithms: ['RS256'],
+      requiredClaims: [
+        'exp',
+        'iat',
+        'sub',
+        'aud',
+        'iss',
+        'nonce',
+        'email',
+        'email_verified',
+        'hd'
+      ],
+      clockTolerance: 5
+    }))
+  } catch {
+    throw new AppError('oidc-token-rejected', 403)
+  }
   if (
     payload.nonce !== nonce ||
     (payload.azp !== undefined && payload.azp !== config.googleClientId) ||
@@ -62,7 +72,8 @@ export function googleStart(
 export async function exchangeGoogle(
   code: string,
   flow: { nonce: string; verifier: string },
-  config: Config
+  config: Config,
+  keys: JWTVerifyGetKey = googleKeys
 ) {
   if (code.length > 4096) throw new AppError('oauth-code-rejected', 403)
   const response = await fetch('https://oauth2.googleapis.com/token', {
@@ -101,5 +112,5 @@ export async function exchangeGoogle(
   >
   if (typeof result.id_token !== 'string')
     throw new AppError('oauth-exchange-failed', 502)
-  return verifyGoogleToken(result.id_token, flow.nonce, config)
+  return verifyGoogleToken(result.id_token, flow.nonce, config, keys)
 }

@@ -79,4 +79,59 @@ for (const label of ['PORTAL_CONFIG', 'GOOGLE_OAUTH_FILE']) {
 }
 console.log('PASS: bounded mounted JSON diagnostics, UID10001 permissions, FIFO timeout and secret/path redaction')
 JS
+docker exec -i "$TASK_CONTAINER" node --input-type=module - <<'JS'
+// Production-profile I/O smoke using a synthetic server-side session fixture.
+// No Google authentication claim: signed callbacks are tested separately.
+import assert from 'node:assert/strict'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { DatabaseSync } from 'node:sqlite'
+const config = JSON.parse(readFileSync('/config/config.json', 'utf8'))
+config.authorizationMode = 'google-mount'
+config.port = 3001
+config.statePath = '/state/shared-validation.sqlite'
+delete config.directoryPath
+writeFileSync('/tmp/shared-validation.json', JSON.stringify(config))
+const child = spawn(process.execPath, ['dist/api/server.js'], {
+  env: { ...process.env, PORTAL_CONFIG: '/tmp/shared-validation.json' }, stdio: ['ignore', 'pipe', 'pipe']
+})
+child.stdout.resume()
+child.stderr.resume()
+const exit = new Promise(resolve => child.once('exit', resolve))
+const hash = text => createHash('sha256').update(text).digest('hex')
+try {
+  const base = 'http://127.0.0.1:3001'
+  let health
+  for (let attempt = 0; attempt < 30; attempt++) {
+    try { health = await fetch(base + '/health/ready'); if (health.ok) break } catch {}
+    await new Promise(resolve => setTimeout(resolve, 200))
+  }
+  assert.equal(health?.status, 200)
+  assert.equal((await health.json()).nasAclEnforced, false)
+  assert.equal((await fetch(base + '/api/files')).status, 401)
+  const token = 'synthetic-server-session-only', now = Date.now()
+  const identity = { iss: 'https://accounts.google.com', sub: 'synthetic-only', email: 'fixture@corp.example', hd: 'corp.example' }
+  const session = { id: hash(token), identity, principalKey: 'google:' + hash(identity.iss + '\0' + identity.sub),
+    generation: 'google-mount-v1', created: now, touched: now, csrf: 'synthetic-csrf', accessProfile: 'google-mount' }
+  const db = new DatabaseSync(config.statePath)
+  db.prepare('INSERT INTO sessions VALUES(?,?)').run(session.id, JSON.stringify(session))
+  assert.equal(db.prepare('SELECT count(*) AS n FROM bindings').get().n, 0)
+  db.close()
+  const headers = { Cookie: '__Host-portal=' + token }
+  const listing = await (await fetch(base + '/api/search', { headers })).json()
+  const file = listing.items.find(item => item.name === 'test.fig')
+  assert.ok(file)
+  for (const excluded of ['outside.fig', 'link.fig', 'pipe.fig', 'hard.fig'])
+    assert.ok(!listing.items.some(item => item.name === excluded))
+  const path = base + '/api/files/' + file.id + '/content'
+  assert.equal((await fetch(path, { method: 'HEAD', headers })).status, 200)
+  const content = await fetch(path, { headers })
+  assert.equal(content.status, 200)
+  assert.equal(await content.text(), 'SYNTHETIC ONLY')
+  for (const method of ['PUT', 'POST', 'DELETE', 'PATCH'])
+    assert.equal((await fetch(path, { method, headers })).status, 404)
+  console.log('PASS: UID10001 production shared profile, no directory/bindings, login gate, Linux RO content and confinement (synthetic session only)')
+} finally { child.kill('SIGTERM'); await exit }
+JS
 printf 'PASS: mounted OAuth JSON/domains, non-root, RO source/rootfs, Linux confinement, strict release gate; no live NAS ACL claim.\n'

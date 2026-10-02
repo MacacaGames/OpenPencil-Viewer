@@ -67,6 +67,17 @@ export class State {
     snapshot: DirectorySnapshot
   ) {
     this.bind(identity, principal, snapshot)
+    return this.createSessionRecord(identity, principal)
+  }
+  createGoogleMountSession(identity: VerifiedIdentity, principal: Principal) {
+    // This separate profile never creates or changes a NAS identity binding.
+    return this.createSessionRecord(identity, principal, 'google-mount')
+  }
+  private createSessionRecord(
+    identity: VerifiedIdentity,
+    principal: Principal,
+    accessProfile?: 'google-mount'
+  ) {
     const token = randomToken(),
       now = Date.now()
     const session: Session = {
@@ -76,7 +87,8 @@ export class State {
       generation: principal.generation,
       created: now,
       touched: now,
-      csrf: randomToken()
+      csrf: randomToken(),
+      ...(accessProfile ? { accessProfile } : {})
     }
     this.db
       .prepare('INSERT INTO sessions VALUES(?,?)')

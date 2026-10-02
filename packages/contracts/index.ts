@@ -53,4 +53,5 @@ export interface Session {
   created: number
   touched: number
   csrf: string
+  accessProfile?: 'google-mount'
 }

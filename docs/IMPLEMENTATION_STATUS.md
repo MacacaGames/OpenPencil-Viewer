@@ -1,6 +1,6 @@
 # Implementation status — OpenPencil × Synology LAN Portal
 
-Updated **2026-10-02 Asia/Taipei**. Local/mock evidence is distinct from live acceptance. The goal remains **blocked for formal NAS release**, not complete. No production deployment, SSH, NAS account/ACL changes, Drive API, NAS writes or second-stage editing occurred.
+Updated **2026-10-03 Asia/Taipei**. Local/mock evidence is distinct from live acceptance. The goal remains **blocked for formal NAS release**, not complete. No production deployment, SSH, NAS account/ACL changes, Drive API, NAS writes or second-stage editing occurred.
 
 | Milestone | Actual status |
 |---|---|
@@ -10,6 +10,7 @@ Updated **2026-10-02 Asia/Taipei**. Local/mock evidence is distinct from live ac
 | M3 | **Blocked**: Portal/Unix broker and evidence/profile gate implemented; native DSM adapter and live acceptance runner still absent; no production grants |
 | M4 | Streaming/cancel/index/revision/limits + raw transport + three approved real FIG native browser loads pass; GPU memory/fidelity/NAS/LAN pending |
 | M5 | arm64 and amd64 images built, container RO/confinement tested, portable exports delivered; HTTPS staging running; CI/NAS release pending |
+| Google shared browse validation | Explicit operator-authorized Google-only/all-configured-roots profile implemented; local signed callback/API/native browser/Linux container passed; amd64 manual-import package exported. Actual NAS Google/FIG verification pending; no DSM per-user ACL claim |
 
 ## Preservation and source pin
 
@@ -247,3 +248,89 @@ Actual verification:
 Locally built **amd64 candidate** `openpencil-lan:nas-bridge-candidate-amd64`, ID **sha256:32d263a8d73659b0b6acef24be757e9935a1bcb8ce2d569860fe695db7ba79cf**, user10001:10001. This reuses the previously tested amd64 runtime/dependencies and copies this turn's complete built dist + public NAS helper. It is a local derived candidate, not a fresh full Dockerfile/release rebuild or a published GHCR artifact. Root Dockerfile and future public exporter include helper; actual exporter/publication were not run this turn. Local logs are ignored .work/nas-bridge-*.log. Existing staging, original release images/bundles, official upstream, original handoff plans and sibling designs preserved.
 
 **Remaining:** target native account/email/enabled/groups/lifecycle schema, principal-specific effective ACL/share semantics and safe descriptor adapter; actual NAS helper/service/socket/permissions install and lifecycle; live matrix/API/UI evidence, same-NAS filesystem/RO/network/reboot/performance; formal image/release publication. Current NAS deployment has not been changed. `directory-unavailable` is **not yet repaired on the NAS**, and formal release remains blocked. No further mock tests can supply the missing native source or replace live acceptance.
+
+## Target synouser query syntax — 2026-10-02 Asia/Taipei
+
+Operator supplied actual target output from `sudo /usr/syno/sbin/synouser --help`. Confirmed listed syntax: `--get username`, `--getuid UID`, `--enum local`, and `--enum_admin local`. No account records, email values, enabled/group/lifecycle fields or permission results were supplied. This is an operator-run read-only help observation, not an agent NAS connection or native-provider acceptance.
+
+Updated capability audit and NAS_BRIDGE with a manual single-account `--get` command piped through awk that masks every value and non-field line. The account name is entered locally by the operator; no whole-directory export is requested. Actual local verification: Python subprocess ran the exact documented awk program against synthetic username/UID/email/password/group/unknown-line fixtures and asserted the fully redacted output: **PASS**. `git diff --check`: **PASS**. Documentation only; full application build/integration checks were not repeated. The proposed account query has **NOT RUN** on NAS in this agent session; target field schema, native adapter, effective ACL/share semantics and live acceptance remain blocked. No NAS accounts/ACLs, sources, services, deployed image or upstream files changed.
+
+## Target single-account field labels — 2026-10-02 Asia/Taipei
+
+Operator manually ran the documented `synouser --get`/redaction pipeline and supplied field labels: User Name, User Type, User uid, Primary gid, Fullname, User Dir, User Shell, Expired, User Mail, Alloc Size, Member Of; four additional lines were redacted. No field values or continuation syntax are known. `Expired` is not treated as verified disabled state, Member Of is not promoted to effective authorization groups, and no reliable account-generation source is established. Updated NAS_BRIDGE/capability audit with this narrow observation and a follow-up single-account User Type/Expired filter plus candidate ACL executable no-argument usage discovery. Neither follow-up has run on NAS in this session.
+
+Actual local checks: exact documented awk status filter tested by subprocess with synthetic type/status and secret name/email/password/group lines: **PASS**, only type/status emitted. `sh -n` of the exact documented ACL discovery loop: **PASS** (syntax only, executable not invoked). `git diff --check`: **PASS**. Documentation-only milestone; application tests/build/browser checks not repeated. Native DSM adapter, effective ACL/share behavior, identity lifecycle and live acceptance remain unimplemented/unverified; no NAS access, changes or deployment by the agent.
+
+## Target bracketed account record — 2026-10-02 Asia/Taipei
+
+Operator supplied a single non-primary account's `synouser --get` record. Recorded only schema observations: bracketed field values; User Type AUTH_LOCAL, Expired false, empty User Mail; Member Of count1 followed by `(numeric-gid) group-name`. Real account name/UID/fullname/home path/group ID were not copied into repository evidence. Empty email cannot participate in the Google-email mapping; nologin shell is not evidence that a DSM account is disabled. This one record does not establish expired/disabled semantics, complete effective groups or lifecycle/generation behavior. ACL usage output is still missing.
+
+Updated capability audit/NAS_BRIDGE only. `git diff --check`: **PASS**. No runtime changes or repeated full build/tests, native parser/provider enablement, agent NAS commands, account/ACL modifications or deployment. Native adapter and live acceptance remain blocked; NAS `directory-unavailable` is not repaired by this observation.
+
+## Non-empty native email shape — 2026-10-02 Asia/Taipei
+
+Operator confirmed non-empty User Mail uses `[address]`, consistent with the previously observed empty `[]` form. The supplied real email address was not copied into repository evidence. This establishes field formatting only; it does not prove source trust, uniqueness, disabled-account semantics or authorization. Updated NAS_BRIDGE; `git diff --check`: **PASS**. Documentation only, no runtime/provider change or NAS operation; native ACL usage and live acceptance remain pending.
+
+## Target synoacltool usage — 2026-10-02 Asia/Taipei
+
+Operator supplied actual usage from manually running `/usr/syno/bin/synoacltool` without arguments. Confirmed query syntax `-get-perm PATH USERNAME`, `-get PATH`, `-getace PATH`, `-check PATH [ACL Perm]`; help describes get-perm as extracting Windows permission from ACL or Linux permission and documents permission alphabet rwxpdDaARWcCo. No actual principal-specific permission response, evaluator semantics, share restrictions or descriptor-safe read evidence was supplied. Query syntax is not live ACL acceptance and does not authorize bytes.
+
+Updated NAS_BRIDGE/capability audit, preparing a manual read-only get-perm observation for the previously operator-authorized `/volume1/Gd`. No mutation commands from usage were proposed or executed. `git diff --check`: **PASS**. Documentation only; application tests/build not repeated. Native adapter, identity lifecycle, same-object principal authorization and all live matrix checks remain pending; agent has not contacted or changed NAS or deployed a release.
+
+## Target get-perm format parser — 2026-10-02 Asia/Taipei
+
+Operator supplied actual `/volume1/Gd` get-perm output: ACL version1, archive flags, owner, numbered ACEs with level, explicit User/Group and Final permission `[rwxpdDaARWc--]`. Selected principal includes administrators; this is not an ordinary A/B baseline or provider acceptance. The root users allow ACE includes r/x, but root membership/mask does not prove children, ancestors, share/service restrictions or safe same-object reading. Real principal name and custom group names were not copied into fixture/evidence files.
+
+Implemented `tools/nas/dsm_query_format.py`, a standalone pure bytes parser for the observed account/get-perm shapes. Bounded UTF8 input, fixed query schemas, expected-username binding, exact permission bit positions, membership counts, sequential ACE records, unique final result, fixed private-data-free errors; immutable observations. The expired field remains raw, email is exact/optional, and no enabled/generation/authorized/ready field is created. Parser never executes commands, reads a file or computes grants from ACEs. **It is not wired into the blocked native adapter and does not repair the deployed directory-unavailable response.** Supplementary membership/true-expired branches have synthetic tests only, not asserted live semantics. Both CI definitions include the new format tests.
+
+Actual local checks:
+- `python3 tests/nas/test_dsm_query_format.py`: **5 PASS /0 FAIL, 0.002s**. Synthetic fixtures test empty/exact-case email, raw status, identity mismatch, malformed/count/duplicate/truncated/unknown/oversized output, exact final mask despite unchanged ACEs and immutable observation; no real NAS account fixture.
+- `python3 -m unittest discover -s tests/nas -p 'test_*.py'`: **12 PASS /1 Linux-only SKIP /0 FAIL, 0.032s** on Darwin.
+- Pinned Node22 Prettier check of `.github/workflows/ghcr.yml` and `.gitlab-ci.yml`: **PASS**.
+- `git diff --check`: **PASS**.
+
+No running application/adapter integration changed; full application test/typecheck/build/browser checks were not repeated for this standalone parser increment. No image rebuilt/published, NAS connection/command by the agent, account/ACL modification, source write or deployment. Remaining: ordinary principal semantics, native disabled/lifecycle source, reliable effective groups, share/ancestor restrictions, descriptor-bound native reading and live matrix. Proposed next manual observation is the previously queried non-admin account on the same authorized root; no credential or employee-directory export required.
+
+## Non-admin root get-perm observation — 2026-10-02 Asia/Taipei
+
+Operator manually repeated `synoacltool -get-perm` for the previously queried non-admin local account on `/volume1/Gd`. Native output lists only users membership for that principal and Final permission `[rwxpdDaARWc--]`; root ACEs still include a users allow entry with that mask. No real account/custom group names copied into fixtures. This confirms a non-admin target query observation, not actual per-user open/read, subfile access, ancestor/share constraints or live acceptance. Do not infer all group members/children are readable or calculate grants from admin/owner ACEs.
+
+Added a synthetic six-ACE/only-users regression fixture with the observed output shape and an unchanged-admin-ACE/denying-final-mask variant. Actual `python3 tests/nas/test_dsm_query_format.py`: **6 PASS /0 FAIL, 0.002s**. `git diff --check`: **PASS**. No runtime/native-adapter wiring changed; full application checks not repeated. No agent NAS connection, source writes, account/ACL changes or release deployment. The formal directory-unavailable condition remains unresolved. Remaining native semantics/lifecycle, same-object reader and live acceptance are unchanged; next observation can target an existing FIG under the already authorized root without permission changes.
+
+## Container-only query assessment — 2026-10-02 Asia/Taipei
+
+Operator asked whether queries can stay entirely in non-root Docker. Reopened primary File Station API guide with web tools; confirmed SID workflow (pages6–7), logged-in-user ACL read/list/traverse fields (pages27/33), share list/download restrictions (page27), and logged-in-user write-only CheckPermission method (page65). HTTPS API calls do not require root in the client container, but a per-user candidate requires that user's actual DSM session for list/content. The reviewed documentation does not establish an arbitrary-principal read/impersonation method using a single admin session or a Google-only token. No invented endpoint/provider added.
+
+Recorded the candidate architectural alternative in NAS_BRIDGE: user DSM session + API could avoid a custom root host helper, but requires a login/session integration change and live per-user acceptance; it is not implemented or target-verified. Existing Google-only strict behavior and root-host-broker option remain unchanged. No runtime/deployment/NAS action. `git diff --check`: **PASS**; documentation-only assessment, no application checks repeated.
+
+## Google-only shared mount validation — 2026-10-03 Asia/Taipei
+
+Operator explicitly requested a version without DSM permission separation: valid Google sign-in grants browsing of all content in the mounted folder to verify FIG opening. This overrides the native-user authorization requirement **only for the explicitly selected `google-mount` validation profile**, not dsm-strict. Implemented named profile rather than a fallback. Existing Workspace policy macaca.games retained; not anonymous/any-Gmail access. Production still requires HTTPS and real Google OIDC; Mock and injected synthetic keys remain loopback-development-only.
+
+Implemented config schema/env `PORTAL_AUTHORIZATION_MODE`, GoogleMountAuthorization over the operator-configured roots, directory-free callback/request identity path, per-Google-sub principal and profile-tagged server sessions. Shared profile never reads directory.json or inserts NAS bindings; production Google signature/audience/issuer/expiry/nonce/state/PKCE/verified-email/hd checks are retained. Reapply current hd policy to sessions; logout/domain changes revoke. Switching between shared and strict profiles rejects shared sessions. Native bridge config is incompatible with shared mode. Original strict/no-native-provider readiness remains503, no implicit downgrade. Wrong signed-token verification now returns fixed403 rather than a generic500, without value-bearing errors.
+
+Filesystem/native UI/read-only flow is reused: only indexed eligible FIGs and folders, configured size/revision/regular/single-link/symlink/mount boundaries, bounded/cancelled streams, no write routes or persistence. Mount I/O still needs UID10001 readability; shared mode cannot bypass kernel EACCES. Native UI labels this shared validation scope, including before login. New config uses separate `/state/google-mount.sqlite`; new Synology Compose omits directory/helper mounts and preserves UID10001, RO source/rootfs, cap_drop and no-new-privileges. `config:check` shared valid config exits0 and reports sharedBrowseValidation; releaseReady remainsfalse for formal DSM ACL release.
+
+Actual checks:
+
+| Command | Actual result |
+|---|---|
+| `npm test` with pinned Node22.23.3, loopback/socket permission | **35 PASS /0 FAIL /0 SKIP, 1.348s**. New signed synthetic callbacks, invalid hd/verified-email/nonce/audience, two users see all roots/eligible FIGs, no bindings/directory, unauth401, logout/domain revoke, strict switch and production test-key rejection |
+| `npm run typecheck` | **PASS**, including new browser/helper files; final check passed after browser changes |
+| `npm run verify-upstream` | **PASS**, pristine SHA8c72b62da07ea1f7e82de84c7c837c3c78dfbf95 |
+| `npm run format:check`, `git diff --check` | **PASS** final |
+| `npm run build` | **PASS**, full package/native Vite/API; Vite1m23s. Existing optional WebGPU vendor/chunk/dynamic-import/plugin warnings remain |
+| Installed Chrome via `.work/config-fix-playwright.config.ts`, mock-flow | **1 PASS /4.6s test**, existing A/B/native UI/read-only/no external document traffic/persistence/source-integrity checks |
+| Same Chrome config, google-mount.spec.ts | **1 PASS /4.6s total, 2.5s test** final. Signed synthetic callback + both users/all root FIGs/nested browse/native2-page FIG/Page2 layers/disabled add/source hash+mtime unchanged/logout. Not real Google/NAS acceptance |
+| `PORTAL_TEST_IMAGE=openpencil-viewer:google-mount-validation sh tests/container/readonly.sh` | **PASS**, amd64 Linux emulation: UID10001, RO rootfs/source, mounted JSON diagnostics, strict503 unchanged; separate production shared process ready200, no directory/NAS bindings, unauth401, synthetic server-session HEAD+GET exact bytes, write routes404, symlink/hardlink/FIFO/nested-mount confinement. Temporary container/state/source cleaned. The production I/O test injects a synthetic server-side session fixture, not Google authentication |
+| Docker save/gzip archive manifest check | **PASS**, archive architecture amd64, Config.User10001:10001, expected server CMD and RepoTag |
+
+Initial full test invocation in sandbox failed four socket/loopback tests with EPERM; reran with permission. New negative-audience HTTP test exposed generic JWT error500 (normalized403), and test helper double-close was fixed before the final35-pass run. Initial browser run from a `.work` config could not locate test server (fixed explicit repository cwd); first actual browser run passed mock but missed redirect interception, sending a synthetic client ID to Google's auth page and receiving invalid_client. No real credentials/tokens were sent. Moved interception to the local auth/start response with maxRedirects0; final shared run passed with all token exchange/signing local. Prettier detected the last browser edit; formatted and final full format check passed.
+
+Built and tested local derived **linux/amd64** image **openpencil-viewer:google-mount-validation**, Docker inspect ID **sha256:f705e7f1b077d349488dfb67265240e9c2e7e70264975d5583a4cf82325759a5**, user10001:10001. Reuses the previously tested0.1.0-amd64 runtime/dependencies and copies this milestone's full built dist/public NAS helpers. This is a validation candidate, not a fresh full Dockerfile/public GHCR release; no dependency change. No registry push/Git commit/push/NAS deployment or account/ACL/source mutation by the agent.
+
+Export `.work/releases/google-mount-validation-amd64-20261003/`: image.tar.gz (**117,833,858 bytes**, SHA256 **91ad868ec6eaf041450908900eb17c742b49b8d219709e7930975de3b8d6b502**), config.google-mount.json, compose.yaml, standalone Chinese READ_ME.md, manifest.json and SHA256SUMS; ZIP wrapper for manual transfer. Bundle contains public runtime/config examples only, no OAuth credentials or state. Logs `.work/google-mount-{tests,build,e2e,e2e-shared,container,image-build,format}.log`. Operator guide: GOOGLE_MOUNT_VALIDATION.md.
+
+**Pending on actual NAS:** import new image, manually select config/Compose, UID10001 source/config readability, real Google login, actual mounted FIG/UI/fidelity/performance. These are not claimed passed. Old sha-8856943 does not understand google-mount; config/env changes alone cannot update that code. Formal native DSM adapter/lifecycle/share/same-object/live matrix remains incomplete; this explicit shared profile does not count as that acceptance.
+
+Operator transfer wrapper final verification: `.work/releases/google-mount-validation-amd64-20261003.zip` **117,841,323 bytes**; ZipFile.testzip CRC/integrity **PASS**, exactly six public files (compressed image, config, Compose, standalone Chinese instructions, manifest, checksums). READ_ME explicitly uses `gunzip -c image.tar.gz > image.tar` so macOS automatic archive extraction does not accidentally unpack Docker layers instead of yielding the importable tar. Recomputed README checksum after the final instruction edit. `git diff --check`: **PASS**. Instructions opened in Codex (queued); no NAS deployment or registry publication performed.

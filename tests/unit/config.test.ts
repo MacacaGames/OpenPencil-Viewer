@@ -21,7 +21,7 @@ const base = {
   googleClientId: 'client',
   googleClientSecret: 'secret'
 }
-test('production requires Google HTTPS + dsm-strict; unknown fields, unsafe roots and mock LAN binding reject', () => {
+test('production requires Google HTTPS and explicit profile; unknown fields, unsafe roots and mock LAN binding reject', () => {
   assert.equal(parseConfig(base).authorizationMode, 'dsm-strict')
   for (const change of [
     { authorizationMode: 'mock' },
@@ -43,6 +43,31 @@ test('production requires Google HTTPS + dsm-strict; unknown fields, unsafe root
       origin: 'http://127.0.0.1:3000'
     })
   )
+})
+
+test('Google shared mount is explicit, has no NAS directory dependency, and cannot use Mock or bridge', () => {
+  const shared = {
+    ...base,
+    authorizationMode: 'google-mount',
+    directoryPath: undefined
+  }
+  assert.equal(parseConfig(shared).authorizationMode, 'google-mount')
+  for (const patch of [
+    { identityProvider: 'mock' },
+    { origin: 'http://design.corp.example' },
+    { googleClientSecret: undefined },
+    { authorizationMode: 'allow-all' },
+    {
+      nasBridge: {
+        socketPath: '/run/bridge.sock',
+        instanceId: 'nas',
+        providerId: 'p',
+        acceptanceSha256: 'a'.repeat(64)
+      }
+    }
+  ])
+    assert.throws(() => parseConfig({ ...shared, ...patch }))
+  assert.throws(() => parseConfig({ ...base, directoryPath: undefined }))
 })
 
 test('native bridge configuration needs strict mode, canonical socket and a pinned evidence digest', () => {

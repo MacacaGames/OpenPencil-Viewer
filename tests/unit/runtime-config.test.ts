@@ -41,6 +41,23 @@ test('native bridge environment is complete, exclusive and keeps errors free of 
       })
     )
     const loaded = loadRuntimeConfig(env)
+    assert.equal(
+      loadRuntimeConfig({
+        PORTAL_CONFIG: path,
+        GOOGLE_OAUTH_FILE: oauth,
+        PORTAL_AUTHORIZATION_MODE: 'google-mount'
+      }).authorizationMode,
+      'google-mount'
+    )
+    assert.throws(
+      () =>
+        loadRuntimeConfig({
+          PORTAL_CONFIG: path,
+          GOOGLE_OAUTH_FILE: oauth,
+          PORTAL_AUTHORIZATION_MODE: 'allow-all'
+        }),
+      /Invalid Portal configuration/
+    )
     assert.equal(loaded.nasBridge?.socketPath, settings.NAS_BRIDGE_SOCKET)
     assert.equal(
       loaded.nasBridge?.acceptanceSha256,

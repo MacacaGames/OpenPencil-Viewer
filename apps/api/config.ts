@@ -8,7 +8,7 @@ const schema = v.strictObject({
   host: nonempty,
   port: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535)),
   identityProvider: v.picklist(['mock', 'google-oidc']),
-  authorizationMode: v.picklist(['mock', 'dsm-strict']),
+  authorizationMode: v.picklist(['mock', 'dsm-strict', 'google-mount']),
   allowedHostedDomains: v.pipe(
     v.array(
       v.pipe(
@@ -19,7 +19,7 @@ const schema = v.strictObject({
     v.minLength(1)
   ),
   statePath: nonempty,
-  directoryPath: nonempty,
+  directoryPath: v.optional(nonempty),
   webPath: nonempty,
   roots: v.pipe(
     v.array(
@@ -65,9 +65,18 @@ export function parseConfig(raw: unknown): Config {
     config.environment === 'production' &&
     (origin.protocol !== 'https:' ||
       config.identityProvider !== 'google-oidc' ||
-      config.authorizationMode !== 'dsm-strict')
+      !['dsm-strict', 'google-mount'].includes(config.authorizationMode))
   )
-    throw new Error('production requires HTTPS, Google OIDC and dsm-strict')
+    throw new Error(
+      'production requires HTTPS, Google OIDC and an explicit Google authorization profile'
+    )
+  if (
+    config.authorizationMode === 'google-mount' &&
+    config.identityProvider !== 'google-oidc'
+  )
+    throw new Error('google-mount requires verified Google OIDC')
+  if (config.authorizationMode !== 'google-mount' && !config.directoryPath)
+    throw new Error('directoryPath required for NAS identity mapping')
   if (
     config.identityProvider === 'mock' &&
     (!['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname) ||

@@ -1,0 +1,44 @@
+# Google Workspace shared-browse validation. No per-user DSM ACL enforcement.
+name: openpencil-viewer
+services:
+  portal:
+    image: openpencil-viewer:google-mount-validation
+    user: '10001:10001'
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PORTAL_CONFIG: /config/config.json
+      PORTAL_AUTHORIZATION_MODE: google-mount
+      GOOGLE_OAUTH_FILE: /run/secrets/google-oauth.json
+      PORTAL_ORIGIN: https://openpencil.macaca.games
+      GOOGLE_HOSTED_DOMAINS: macaca.games
+    ports: ['127.0.0.1:24681:3000']
+    volumes:
+      - type: bind
+        source: /volume1/Manager/DockerCompose/Openpencil/config.google-mount.json
+        target: /config/config.json
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: /volume1/Manager/DockerCompose/Openpencil/google_client.json
+        target: /run/secrets/google-oauth.json
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: /volume1/Gd
+        target: /data/designs
+        read_only: true
+        bind: { create_host_path: false, propagation: rprivate }
+      - type: bind
+        source: /volume1/Manager/DockerCompose/Openpencil/state
+        target: /state
+        bind: { create_host_path: false }
+    tmpfs: ['/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777']
+    pids_limit: 128
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: '10m', max-file: '3' }

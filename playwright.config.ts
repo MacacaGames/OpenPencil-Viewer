@@ -21,17 +21,27 @@ export default defineConfig({
       }
     }
   ],
-  webServer: {
-    command: 'npm run dev:mock',
-    url: origin + '/health/ready',
-    reuseExistingServer: false,
-    timeout: 120000,
-    env: {
-      PORT: '3212',
-      PORTAL_ORIGIN: origin,
-      STATE_PATH: '.work/e2e-state.sqlite',
-      MOCK_ROOT: '.work/e2e-nas'
+  webServer: [
+    {
+      command: 'npm run dev:mock',
+      cwd: import.meta.dirname,
+      url: origin + '/health/ready',
+      reuseExistingServer: false,
+      timeout: 120000,
+      env: {
+        PORT: '3212',
+        PORTAL_ORIGIN: origin,
+        STATE_PATH: '.work/e2e-state.sqlite',
+        MOCK_ROOT: '.work/e2e-nas'
+      }
+    },
+    {
+      command: 'node --import tsx tests/e2e/google-mount-server.ts',
+      cwd: import.meta.dirname,
+      url: 'http://127.0.0.1:3213/health/ready',
+      reuseExistingServer: false,
+      timeout: 30000
     }
-  },
+  ],
   reporter: [['list'], ['json', { outputFile: 'test-results/report.json' }]]
 })

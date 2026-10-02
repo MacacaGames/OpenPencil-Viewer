@@ -84,6 +84,8 @@ export function loadRuntimeConfig(env: Environment = process.env): Config {
   if ('googleClientId' in raw || 'googleClientSecret' in raw)
     throw new Error('Keep OAuth credentials outside Portal config JSON')
   if (env.PORTAL_ORIGIN !== undefined) raw.origin = env.PORTAL_ORIGIN
+  if (env.PORTAL_AUTHORIZATION_MODE !== undefined)
+    raw.authorizationMode = env.PORTAL_AUTHORIZATION_MODE
   if (env.GOOGLE_HOSTED_DOMAINS !== undefined)
     raw.allowedHostedDomains = env.GOOGLE_HOSTED_DOMAINS.split(',').map((d) =>
       d.trim()

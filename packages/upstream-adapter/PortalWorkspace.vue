@@ -17,6 +17,7 @@ const me = ref<{
     authorization: string
   } | null>(null),
   provider = ref(''),
+  authorization = ref(''),
   files = ref<FileRecord[]>([]),
   roots = ref<FileRecord[]>([]),
   parent = ref(''),
@@ -143,7 +144,11 @@ onMounted(async () => {
   window.addEventListener('pagehide', pageHidden)
   window.addEventListener('pageshow', pageShown)
   try {
-    provider.value = (await api<{ provider: string }>('/auth/mode')).provider
+    const mode = await api<{ provider: string; authorization: string }>(
+      '/auth/mode'
+    )
+    provider.value = mode.provider
+    authorization.value = mode.authorization
     await refresh()
     if (!viewing.value) return
     const id = new URLSearchParams(location.search).get('id')
@@ -202,6 +207,12 @@ onUnmounted(() => {
       <a href="/" class="font-semibold">OpenPencil · LAN Portal</a>
       <span v-if="viewing" data-test-id="portal-document-name">{{ name }}</span>
       <span class="rounded border border-border px-2 py-1 text-xs">唯讀</span>
+      <span
+        v-if="authorization === 'google-mount'"
+        class="text-xs text-muted"
+        data-test-id="shared-browse-profile"
+        >共用瀏覽驗證 · 不套用 DSM 個別權限</span
+      >
       <span v-if="viewing && ready" class="text-xs text-muted"
         >來源：{{ me?.authorization === 'mock' ? 'Mock fixture' : 'NAS' }} ·
         讀取完成</span
@@ -217,7 +228,11 @@ onUnmounted(() => {
     </header>
     <div v-if="!me" class="mx-auto my-16 flex max-w-lg flex-col gap-5 px-8">
       <h1 class="text-xl font-semibold">登入設計文件入口</h1>
-      <p>依你的 NAS 權限瀏覽 .fig，使用原生 OpenPencil 唯讀檢視。</p>
+      <p v-if="authorization === 'google-mount'">
+        Google Workspace 登入後可瀏覽此入口掛載的所有設計文件，使用原生
+        OpenPencil 唯讀檢視。
+      </p>
+      <p v-else>依你的 NAS 權限瀏覽 .fig，使用原生 OpenPencil 唯讀檢視。</p>
       <template v-if="provider === 'mock'">
         <p class="text-sm text-muted">
           本機 Mock：僅有合成文件，未驗證 DSM ACL。

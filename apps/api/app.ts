@@ -3,10 +3,11 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import { bodyLimit } from 'hono/body-limit'
 import { Readable } from 'node:stream'
+import type { JWTVerifyGetKey } from 'jose'
 import { constants, openSync, closeSync, fstatSync, readSync } from 'node:fs'
 import { NasBridge } from '../../packages/nas-bridge/index.ts'
 import type { Config } from './config.ts'
-import { State } from './state.ts'
+import { State, digest } from './state.ts'
 import { googleStart, exchangeGoogle } from './oidc.ts'
 import {
   parseDirectory,
@@ -16,18 +17,33 @@ import {
 import {
   AppError,
   type Principal,
+  type VerifiedIdentity,
   type FileRecord
 } from '../../packages/contracts/index.ts'
 import { FileIndex } from '../../packages/filesystem/index.ts'
 import {
   type AuthorizationProvider,
   MockAuthorization,
+  GoogleMountAuthorization,
   DsmStrictAuthorization
 } from '../../packages/authorization/index.ts'
 export function createPortal(
   config: Config,
-  options: { authorization?: AuthorizationProvider; index?: FileIndex } = {}
+  options: {
+    authorization?: AuthorizationProvider
+    index?: FileIndex
+    googleTokenKeys?: JWTVerifyGetKey
+  } = {}
 ) {
+  if (
+    options.googleTokenKeys &&
+    (config.environment !== 'development' ||
+      !['127.0.0.1', 'localhost', '[::1]'].includes(
+        new URL(config.origin).hostname
+      ) ||
+      !['127.0.0.1', '::1'].includes(config.host))
+  )
+    throw new Error('Test OIDC keys are loopback development only')
   const app = new Hono(),
     state = new State(config.statePath),
     index = options.index ?? new FileIndex(config.roots, config.maxFileBytes)
@@ -57,21 +73,43 @@ export function createPortal(
             ]
           ])
         )
-      : new DsmStrictAuthorization(
-          config.nasBridge
-            ? new NasBridge(
-                config.nasBridge,
-                config.environment,
-                config.roots.map((root) => root.id),
-                index.identities,
-                config.maxFileBytes,
-                config.environment === 'development' &&
-                  config.identityProvider === 'mock'
-              )
-            : undefined
-        ))
+      : config.authorizationMode === 'google-mount'
+        ? new GoogleMountAuthorization(
+            new Set(config.roots.map((root) => root.id))
+          )
+        : new DsmStrictAuthorization(
+            config.nasBridge
+              ? new NasBridge(
+                  config.nasBridge,
+                  config.environment,
+                  config.roots.map((root) => root.id),
+                  index.identities,
+                  config.maxFileBytes,
+                  config.environment === 'development' &&
+                    config.identityProvider === 'mock'
+                )
+              : undefined
+          ))
   const bridge =
     authz instanceof DsmStrictAuthorization ? authz.bridge : undefined
+  const sharedBrowse = config.authorizationMode === 'google-mount'
+  const googlePrincipal = (identity: VerifiedIdentity): Principal => {
+    // Reapply the current domain policy to server-stored verified identity.
+    const verified = checkIdentityClaims(
+      { ...identity, email_verified: true },
+      config.allowedHostedDomains
+    )
+    return {
+      key: 'google:' + digest(verified.iss + '\0' + verified.sub),
+      generation: 'google-mount-v1',
+      username: verified.email,
+      email: verified.email,
+      enabled: true,
+      trustedEmail: true,
+      system: false,
+      groups: []
+    }
+  }
   const cookieName = config.origin.startsWith('https:')
     ? '__Host-portal'
     : 'portal'
@@ -89,6 +127,7 @@ export function createPortal(
     if (authz.directory) return authz.directory()
     let fd: number | undefined
     try {
+      if (!config.directoryPath) throw new Error('missing-directory')
       fd = openSync(
         config.directoryPath,
         constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
@@ -134,6 +173,17 @@ export function createPortal(
   const identify = async (cookie: string | undefined) => {
     const session = state.session(cookie)
     try {
+      if (sharedBrowse !== (session.accessProfile === 'google-mount'))
+        throw new AppError('login-required', 401)
+      if (sharedBrowse) {
+        const principal = googlePrincipal(session.identity)
+        if (
+          principal.key !== session.principalKey ||
+          principal.generation !== session.generation
+        )
+          throw new AppError('identity-review-required', 403)
+        return { session, principal }
+      }
       const snapshot = await directory(),
         principal = resolvePrincipal(snapshot, session.identity)
       state.bind(session.identity, principal, snapshot)
@@ -147,6 +197,16 @@ export function createPortal(
       state.revoke(session.id)
       throw error
     }
+  }
+  const createLoginSession = async (identity: VerifiedIdentity) => {
+    if (sharedBrowse)
+      return state.createGoogleMountSession(identity, googlePrincipal(identity))
+    const snapshot = await directory()
+    return state.createSession(
+      identity,
+      resolvePrincipal(snapshot, identity),
+      snapshot
+    )
   }
   const allowed = async (principal: Principal, record: FileRecord) => {
     if (!index.online.get(record.rootId) || !(await authz.ready()))
@@ -201,21 +261,35 @@ export function createPortal(
   )
   app.get('/health/live', (c) => c.json({ live: true }))
   app.get('/health/ready', async (c) => {
-    let dirReady = false
+    let dirReady = sharedBrowse
     try {
-      const snapshot = await directory()
-      dirReady =
-        snapshot.expiresAt > Date.now() &&
-        snapshot.observedAt >= Date.now() - 300000
+      if (!sharedBrowse) {
+        const snapshot = await directory()
+        dirReady =
+          snapshot.expiresAt > Date.now() &&
+          snapshot.observedAt >= Date.now() - 300000
+      }
     } catch {}
     const ready =
       authz.mode === config.authorizationMode &&
       (await authz.ready()) &&
       dirReady &&
       config.roots.every((r) => index.online.get(r.id))
-    return c.json({ ready, authorization: authz.mode }, ready ? 200 : 503)
+    return c.json(
+      {
+        ready,
+        authorization: authz.mode,
+        nasAclEnforced: config.authorizationMode === 'dsm-strict'
+      },
+      ready ? 200 : 503
+    )
   })
-  app.get('/auth/mode', (c) => c.json({ provider: config.identityProvider }))
+  app.get('/auth/mode', (c) =>
+    c.json({
+      provider: config.identityProvider,
+      authorization: config.authorizationMode
+    })
+  )
   app.use(
     '/auth/mock',
     bodyLimit({
@@ -239,29 +313,23 @@ export function createPortal(
     const account = body.account,
       email = account === 'A' ? 'alice@mock.example' : 'bob@mock.example'
     const identity = checkIdentityClaims(
-        {
-          iss: 'https://accounts.google.com',
-          sub: 'mock-' + account,
-          email,
-          hd: 'mock.example',
-          email_verified: true
-        },
-        config.allowedHostedDomains
-      ),
-      snapshot = await directory(),
-      principal = resolvePrincipal(snapshot, identity)
+      {
+        iss: 'https://accounts.google.com',
+        sub: 'mock-' + account,
+        email,
+        hd: 'mock.example',
+        email_verified: true
+      },
+      config.allowedHostedDomains
+    )
+    const token = await createLoginSession(identity)
     const previous = getCookie(c, cookieName)
     if (previous) {
       try {
         state.revoke(state.session(previous).id)
       } catch {}
     }
-    setCookie(
-      c,
-      cookieName,
-      state.createSession(identity, principal, snapshot),
-      cookieOptions
-    )
+    setCookie(c, cookieName, token, cookieOptions)
     return c.json({ ok: true })
   })
   app.get('/auth/google/start', (c) => {
@@ -281,24 +349,23 @@ export function createPortal(
     deleteCookie(c, 'portal-oidc', cookieOptions)
     const code = c.req.query('code')
     if (!code || c.req.query('error')) throw new AppError('oauth-rejected', 403)
-    const identity = await exchangeGoogle(code, flow, config)
+    const identity = await exchangeGoogle(
+      code,
+      flow,
+      config,
+      options.googleTokenKeys
+    )
     // A verified Google identity is still not a NAS principal or a file grant.
     // Record only the phase, without tokens/email, when NAS setup is pending.
     state.audit('', '', 'oidc-verified')
-    const snapshot = await directory(),
-      principal = resolvePrincipal(snapshot, identity)
+    const token = await createLoginSession(identity)
     const previous = getCookie(c, cookieName)
     if (previous) {
       try {
         state.revoke(state.session(previous).id)
       } catch {}
     }
-    setCookie(
-      c,
-      cookieName,
-      state.createSession(identity, principal, snapshot),
-      cookieOptions
-    )
+    setCookie(c, cookieName, token, cookieOptions)
     return c.redirect('/')
   })
   app.post('/auth/logout', async (c) => {
