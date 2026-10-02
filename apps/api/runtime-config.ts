@@ -3,12 +3,26 @@ import { isAbsolute } from 'node:path'
 import { parseConfig, type Config } from './config.ts'
 
 type Environment = Record<string, string | undefined>
+class ConfigFileError extends Error {}
+function fileError(label: string, reason: string): never {
+  throw new ConfigFileError(`${label}: ${reason}`)
+}
 function readObject(path: string, limit: number, label: string) {
   let fd: number | undefined
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+    // A mis-mounted FIFO must fail the type check without waiting for a writer.
+    fd = openSync(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+    )
     const before = fstatSync(fd)
-    if (!before.isFile() || before.size > limit) throw new Error()
+    if (before.isDirectory())
+      fileError(
+        label,
+        'is a directory; mount an existing JSON file, not a directory'
+      )
+    if (!before.isFile()) fileError(label, 'must be a regular JSON file')
+    if (before.size > limit) fileError(label, `exceeds the ${limit}-byte limit`)
     const bytes = Buffer.alloc(limit + 1)
     let length = 0
     while (length < bytes.length) {
@@ -23,16 +37,39 @@ function readObject(path: string, limit: number, label: string) {
       after.size !== before.size ||
       after.mtimeMs !== before.mtimeMs
     )
-      throw new Error()
-    const value: unknown = JSON.parse(
-      bytes.subarray(0, length).toString('utf8')
-    )
+      fileError(label, 'changed while being read or exceeded its size limit')
+    let value: unknown
+    try {
+      value = JSON.parse(bytes.subarray(0, length).toString('utf8'))
+    } catch {
+      fileError(label, 'contains invalid JSON; check the file syntax')
+    }
     if (!value || typeof value !== 'object' || Array.isArray(value))
-      throw new Error()
+      fileError(label, 'must contain a JSON object')
     return value as Record<string, unknown>
-  } catch {
+  } catch (error) {
     // Never include input JSON, secrets or a parser's value-bearing error.
-    throw new Error(`${label} must be a bounded regular JSON file`)
+    if (error instanceof ConfigFileError) throw error
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR')
+      fileError(
+        label,
+        'file was not found; create the host JSON file and check its container mount target'
+      )
+    if (code === 'EACCES' || code === 'EPERM')
+      fileError(
+        label,
+        'file is not readable; check file permissions for the container user (UID 10001)'
+      )
+    if (code === 'ELOOP')
+      fileError(
+        label,
+        'must not be a symbolic link; mount the regular JSON file'
+      )
+    fileError(
+      label,
+      'could not be read; check the JSON file mount and permissions'
+    )
   } finally {
     if (fd !== undefined) closeSync(fd)
   }

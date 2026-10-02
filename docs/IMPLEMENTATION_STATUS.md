@@ -136,6 +136,30 @@ Git preparation checks: upstream pristine/pin PASS, actionlint PASS, staged diff
 
 First full staged `git diff --cached --check` reported the literal one-space blank context lines required by the stored unified patch. Added scoped .gitattributes `patches/open-pencil/*.patch whitespace=-blank-at-eol` without changing the patch bytes. `git -C upstream/open-pencil apply --check --whitespace=error ../../patches/open-pencil/0001-lan-readonly.patch` PASS validates the actual added source; cached diff check then PASS. FIG marked binary, with no LFS filter. Format and workflow lint PASS. Staged source inventory is approximately 0.4 MiB plus the fixed upstream gitlink, not the built images or supplied designs. Local initial commit and final clean-tree checks are reported in the handoff response; user performs the push.
 
+## Synology runtime config diagnostics — 2026-10-02 Asia/Taipei
+
+Operator reported a repeating `PORTAL_CONFIG must be a bounded regular JSON file` startup error in Synology Container Manager, using `ghcr.io/macacagames/openpencil-viewer:sha-8856943`. Provided Compose maps an existing host config to `/config/config.json`, matching PORTAL_CONFIG; screenshot shows a 545-byte JSON file. This rules out the displayed file being oversized but does **not** prove the container can read the NAS mount or that its bytes are valid JSON. Actual NAS cause remains pending operator diagnostic output; UID10001 access, actual mount and JSON syntax must be checked. No NAS connection, ACL/account changes, source mount or deployment was performed by the agent.
+
+Runtime loader now reports separate sanitized errors for missing/unreadable files, directories, symlinks, size overflow, changes during read, malformed JSON and non-object JSON. It keeps the same size bounds, descriptor consistency and no-follow checks; O_NONBLOCK prevents a FIFO mount from hanging startup before the regular-file check. No JSON contents, OAuth secrets or supplied private paths appear in diagnostics. Google OAuth JSON uses the same checks. No config defaults, permission bypass or authorization fallback added.
+
+QUICK_START and OPERATOR_HANDOFF now explain manual JSON preparation, host source versus container target, and Container Manager UI checks. For the operator's existing image, a temporary `restart: no` / Node metadata command reports UID, regular-file/size/readability or a sanitized filesystem error without reading JSON contents. The updated loader requires a new build; no GHCR push or tag replacement occurred.
+
+Actual commands, with PATH selecting Node **22.23.3** and local Bun **1.4.2**:
+
+| Command actually run | Result |
+|---|---|
+| `node --import tsx --test tests/unit/runtime-config.test.ts` | **5 PASS**, including both mounted JSON labels, inclusive config size limit, permissions, no-follow, syntax/object rejection, secret/path redaction and FIFO timeout |
+| `npm test` | First sandbox run **26 PASS / 1 FAIL** due solely to localhost `listen EPERM`; rerun with localhost permission **27 PASS / 0 FAIL**, no skipped tests |
+| `npm run typecheck` | PASS |
+| `npm run verify-upstream` | PASS, pristine exact locked SHA |
+| `npm run format:check`, `git diff --check`, `sh -n tests/container/readonly.sh` | PASS |
+| `npm run build` | PASS complete package/native Vite/API build; Vite **1m30s**, existing optional WebGPU/chunk/plugin warnings remain |
+| `docker build --network none --pull=false -t openpencil-lan:config-diagnostics-test .work/config-diagnostics-context` | PASS; local test image derived from previously tested arm64 image with only newly compiled dist/api copied in, not a full release image rebuild |
+| `PORTAL_TEST_IMAGE=openpencil-lan:config-diagnostics-test sh tests/container/readonly.sh` | PASS non-root/source+rootfs RO/confinement/strict503; added **12** compiled config-check negative cases (six causes for each JSON label), including UID10001 EACCES and bounded FIFO rejection |
+| `npm run test:e2e -- --config .work/config-fix-playwright.config.ts tests/e2e/mock-flow.spec.ts` | **1 PASS / 13.5s**, test **7.0s**; existing installed Google Chrome selected via ignored temporary config because default Playwright browser cache is absent. Synthetic A/B/native UI/readonly/network/persistence/history/source integrity only |
+
+Task-owned synthetic containers/volume and browser/server cleaned up by tests; local test image remains for reproduction. Existing staging container, original release images/bundles, upstream source and supplied designs unchanged. New amd64 release image, GHCR publication, actual NAS JSON access and all pending native provider/live ACL checks remain **NOT RUN**. Strict still fails closed. Adapter/editor implementation unchanged; no new real-document or live Google acceptance claimed.
+
 ## Standalone Synology Compose — 2026-10-02 Asia/Taipei
 
 User requested a Synology Docker Compose. Added deploy/compose.synology.ui.example.yml as a standalone Container Manager Project template, no .env/extends required. Exact current origin/hd, same-NAS loopback port24681, explicit private single JSON mounts, isolated test_files RO, separate state RW, UID10001, RO rootfs/cap-drop/security/resource/log restrictions. Image digest remains an explicit operator placeholder; no registry availability/digest invented. OPERATOR_HANDOFF explains files, state UID/mode, image import alternative and remote nginx NAS-IP adjustment.

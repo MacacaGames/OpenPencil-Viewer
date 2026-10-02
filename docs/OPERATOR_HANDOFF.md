@@ -39,6 +39,67 @@ Workspace `hd` 已確認為 `macaca.games`。只要求 `openid email profile`；
 
 Portal config 與 directory snapshot 由管理員控制；config 不保存 secret。`directory.example.json` 刻意過期且無 principals，請勿自行填成寬鬆 NAS 授權。NAS snapshot／native provider 是下一個實機里程碑的工作。
 
+## Synology 啟動時出現 PORTAL_CONFIG 錯誤
+
+`PORTAL_CONFIG must be a bounded regular JSON file` 表示設定檔讀取／JSON 解析失敗，發生在 Google 登入與 DSM 授權之前。舊映像把路徑不存在、目錄、symlink、權限不足、超過 262,144 bytes、JSON 語法錯誤與非 object 都顯示成這一則訊息；新建置會指出失敗類型，不輸出檔案內容、secret 或私密路徑。反覆出現相同堆疊是 `restart: unless-stopped` 重啟失敗程式。
+
+在 Container Manager 先停止這個 Project，再用 File Station 核對部署檔案。獨立 Synology 範本的對應如下；若你改過 source，使用自己的實際 NAS 路徑：
+
+```yaml
+environment:
+  PORTAL_CONFIG: /config/config.json
+volumes:
+  - type: bind
+    source: /volume1/docker/openpencil-viewer/private/config.json
+    target: /config/config.json
+    read_only: true
+    bind: { create_host_path: false }
+```
+
+`source` 是 NAS 上已存在的**檔案**，`PORTAL_CONFIG` 是容器內的 `target`，不能填 NAS host 路徑。映像不附操作員 config.json，也不會自動產生這三份部署 JSON。請將 [config.example.json](../deploy/config.example.json) 下載／複製到 File Station 的 `private` 目錄並命名為 `config.json`；directory 使用另一份 [directory.example.json](../deploy/directory.example.json)，Google OAuth JSON 也另放。不要把 Compose YAML 或 Google JSON 當 Portal config。
+
+若 `config.json` 實際是目錄，先核對內容並更名保留，再放入真正的檔案。[Docker 的短格式 `-v` 掛載](https://docs.docker.com/engine/storage/bind-mounts/)會將不存在的來源建成目錄；長格式與 `create_host_path: false` 可避免自動建立。只確認副檔名不夠。
+
+檔案必須是 UTF-8 JSON object（第一個非空白字元為 `{`）、不超過 256 KiB，且容器 UID10001 可讀。使用管理員控制的專用部署檔案；不要更改 NAS 原始文件 ACL、放寬整個 private 目錄或改成 root。JSON 語法合法仍需通過 Portal schema；公用 config 範本已具備 Google／HTTPS／dsm-strict 的結構。
+
+操作員若已有 Docker host 終端，可使用 [一次性 Compose run](https://docs.docker.com/reference/cli/docker/compose/run/) 檢查，不依賴正在反覆重啟的容器，也不啟動 Web port 或寫 state：
+
+```sh
+# 在你的部署目錄執行；獨立範本若命名為 compose.yml，使用 -f compose.yml。
+docker compose run --rm --no-deps --entrypoint node portal dist/api/check-config.js
+```
+
+只使用 Container Manager UI 時，可暫時將該 Project 的 `portal` service 改成以下兩個欄位，重新建立測試容器後看 logs：
+
+```yaml
+restart: 'no'
+command: ['node', 'dist/api/check-config.js']
+```
+
+若目前映像仍只回報舊的通用錯誤，可改用下列 `command` 先確認 UID10001 的檔案讀取權限。它只輸出 metadata 與錯誤代碼，不輸出 JSON／OAuth 內容：
+
+```yaml
+restart: 'no'
+command:
+  - node
+  - -e
+  - |
+    const fs = require('node:fs');
+    try {
+      const p = process.env.PORTAL_CONFIG;
+      const s = fs.lstatSync(p);
+      fs.accessSync(p, fs.constants.R_OK);
+      console.log({uid: process.getuid(), regularFile: s.isFile(), bytes: s.size, readable: true});
+    } catch (e) {
+      console.error({uid: process.getuid(), code: e.code || 'CHECK_FAILED'});
+      process.exitCode = 1;
+    }
+```
+
+`EACCES`／`EPERM` 表示該容器使用者的檔案／父路徑讀取權限不足；`ENOENT`／`ENOTDIR` 表示容器路徑不存在或掛載不符；`regularFile: false` 表示掛載不是 regular file。若 regularFile/readable 都是 true 且 bytes 不超標，再檢查 JSON 語法與 object 格式。
+
+執行 `dist/api/check-config.js` 時，成功檢查會輸出 `configuration: valid`、`releaseReady: false` 並 **exit 2**；這是 strict 尚未通過 NAS 驗收的預期結果。設定錯誤為 exit 1。完成後移除暫時的 `command`，恢復 `restart: unless-stopped`，重新建立該隔離測試 Project。正常啟動後 `/health/live` 應為 200、`/health/ready` 仍為 503。修復這個設定檔錯誤不會啟用 NAS 身份或 ACL provider。
+
 ## 先啟動隔離測試容器
 
 以下在 **Docker host** 上手動執行。把四個絕對路徑與 Workspace domain 換成自己的值；來源必須是已批准的測試子目錄。`PORTAL_IMAGE` 使用交付 manifest 的 image ID／已測 registry digest。

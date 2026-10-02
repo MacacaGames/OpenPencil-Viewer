@@ -54,6 +54,8 @@ PORTAL_HOST_PORT=3210
 
 設定範本在 `deploy/config.example.json`、`deploy/directory.example.json`。Google Cloud Web application 的 callback 必須精確是 `https://openpencil.macaca.games/auth/google/callback`。Google JSON、Portal config、directory 是三份不同檔案。
 
+這三份 JSON 不包含在映像內，啟動前要在 Docker host 手動準備成檔案。若 Synology 顯示 `PORTAL_CONFIG must be a bounded regular JSON file`，請依 [設定檔故障排查](docs/OPERATOR_HANDOFF.md#synology-啟動時出現-portal_config-錯誤) 檢查 File Station 的檔案、source／target 與 UID10001 可讀性；Container Manager UI 也可執行一次性 config check。
+
 你的現有 nginx upstream 為 `http://10.0.1.31:24681`；**本機 staging** 使用 `PORTAL_BIND_ADDRESS=10.0.1.31`、`PORTAL_HOST_PORT=24681`。同 NAS proxy 預設 loopback 3210；proxy 在另一台時只綁指定 LAN interface 並限制來源。HTTPS 入口需要 LAN／VPN 限制；不要使用 `0.0.0.0` 自動公開。
 
 ## 3. 啟動與檢查

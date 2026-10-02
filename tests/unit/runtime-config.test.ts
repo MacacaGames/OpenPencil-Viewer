@@ -4,12 +4,141 @@ import {
   mkdtempSync,
   readFileSync,
   writeFileSync,
+  mkdirSync,
+  chmodSync,
   symlinkSync,
   rmSync
 } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadRuntimeConfig } from '../../apps/api/runtime-config.ts'
+
+test('mounted JSON failures identify the cause without leaking contents or private paths', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'portal-private-config-'))
+  const configPath = join(dir, 'config.json'),
+    oauthPath = join(dir, 'google.json')
+  const config = readFileSync('deploy/config.example.json', 'utf8')
+  writeFileSync(configPath, config)
+  writeFileSync(
+    oauthPath,
+    JSON.stringify({
+      web: {
+        client_id: 'test-client',
+        client_secret: 'test-secret-do-not-log',
+        redirect_uris: ['https://openpencil.macaca.games/auth/google/callback']
+      }
+    })
+  )
+  const env = { PORTAL_CONFIG: configPath, GOOGLE_OAUTH_FILE: oauthPath }
+  try {
+    // The configured limit remains inclusive for a valid JSON object.
+    writeFileSync(configPath, config.padEnd(262144, ' '))
+    assert.equal(loadRuntimeConfig(env).authorizationMode, 'dsm-strict')
+    writeFileSync(configPath, config)
+    for (const label of ['PORTAL_CONFIG', 'GOOGLE_OAUTH_FILE'] as const) {
+      const bad = join(dir, 'bad.json')
+      const cases: [() => void, string][] = [
+        [() => {}, 'file was not found'],
+        [() => mkdirSync(bad), 'is a directory'],
+        [() => symlinkSync(configPath, bad), 'must not be a symbolic link'],
+        [
+          () =>
+            writeFileSync(
+              bad,
+              ' '.repeat(label === 'PORTAL_CONFIG' ? 262145 : 65537)
+            ),
+          'exceeds the'
+        ],
+        [
+          () => writeFileSync(bad, '{test-secret-do-not-log'),
+          'contains invalid JSON'
+        ],
+        [() => writeFileSync(bad, ''), 'contains invalid JSON'],
+        [() => writeFileSync(bad, '[]'), 'must contain a JSON object'],
+        [() => writeFileSync(bad, 'null'), 'must contain a JSON object'],
+        [
+          () => writeFileSync(bad, '"test-secret-do-not-log"'),
+          'must contain a JSON object'
+        ]
+      ]
+      for (const [prepare, reason] of cases) {
+        rmSync(bad, { recursive: true, force: true })
+        prepare()
+        assert.throws(
+          () => loadRuntimeConfig({ ...env, [label]: bad }),
+          (e: unknown) =>
+            e instanceof Error &&
+            e.message.startsWith(`${label}:`) &&
+            e.message.includes(reason) &&
+            !e.message.includes('test-secret') &&
+            !e.message.includes(dir)
+        )
+      }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('unreadable mounted config reports container-user permissions', (t) => {
+  if (process.getuid?.() === 0 || process.platform === 'win32') {
+    t.skip('requires an unprivileged Unix user')
+    return
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'portal-config-permissions-'))
+  const path = join(dir, 'config.json')
+  try {
+    writeFileSync(path, 'test-secret-do-not-log', { mode: 0o000 })
+    assert.throws(
+      () => loadRuntimeConfig({ PORTAL_CONFIG: path }),
+      (e: unknown) =>
+        e instanceof Error &&
+        e.message.startsWith('PORTAL_CONFIG: file is not readable') &&
+        e.message.includes('UID 10001') &&
+        !e.message.includes('test-secret') &&
+        !e.message.includes(dir)
+    )
+  } finally {
+    chmodSync(path, 0o600)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a FIFO mounted as config fails without waiting for a writer', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('requires Unix FIFOs')
+    return
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'portal-config-fifo-'))
+  const path = join(dir, 'config.json')
+  try {
+    assert.equal(spawnSync('mkfifo', [path]).status, 0)
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        '--input-type=module',
+        '--eval',
+        'import { loadRuntimeConfig } from "./apps/api/runtime-config.ts"; try { loadRuntimeConfig(); process.exitCode = 1 } catch (error) { console.error(error.message) }'
+      ],
+      {
+        env: { ...process.env, PORTAL_CONFIG: path },
+        encoding: 'utf8',
+        timeout: 5000
+      }
+    )
+    assert.equal(result.error, undefined)
+    assert.equal(result.status, 0)
+    assert.match(
+      result.stderr,
+      /^PORTAL_CONFIG: must be a regular JSON file\s*$/
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 test('mounted web OAuth JSON + environment domains work without exposing secrets or trusting JSON endpoints', () => {
   const dir = mkdtempSync(join(tmpdir(), 'portal-runtime-config-'))

@@ -22,6 +22,11 @@ ln "$TASK_DIR/source/hard.fig" "$TASK_DIR/source/hard.txt"
 ln -s /outside/outside.fig "$TASK_DIR/source/link.fig"
 mkfifo "$TASK_DIR/source/pipe.fig"
 printf '{"web":{"client_id":"synthetic","client_secret":"synthetic","redirect_uris":["https://design.corp.example/auth/google/callback"]}}' > "$TASK_DIR/config/google.json"
+printf '{SYNTHETIC_CONFIG_SECRET_DO_NOT_LOG' > "$TASK_DIR/config/invalid.json"
+cp "$TASK_DIR/config/config.json" "$TASK_DIR/config/unreadable.json"
+chmod 000 "$TASK_DIR/config/unreadable.json"
+mkfifo "$TASK_DIR/config/pipe.json"
+dd if=/dev/zero of="$TASK_DIR/config/oversize.json" bs=262145 count=1 2>/dev/null
 chmod 755 "$TASK_DIR" "$TASK_DIR/source" "$TASK_DIR/config" "$TASK_DIR/outside" "$TASK_DIR/source/nested"
 docker run -d --name "$TASK_CONTAINER" --read-only --user 10001:10001 \
  --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 \
@@ -49,4 +54,29 @@ docker exec -i "$TASK_CONTAINER" python3 - < tests/container/filesystem.py
 TASK_STATUS=0
 docker exec "$TASK_CONTAINER" node dist/api/check-config.js || TASK_STATUS=$?
 [ "$TASK_STATUS" -eq 2 ]
+docker exec -i "$TASK_CONTAINER" node --input-type=module - <<'JS'
+import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+for (const label of ['PORTAL_CONFIG', 'GOOGLE_OAUTH_FILE']) {
+ for (const [path, reason] of [
+  ['/config', 'is a directory'],
+  ['/config/missing.json', 'file was not found'],
+  ['/config/invalid.json', 'contains invalid JSON'],
+  ['/config/unreadable.json', 'file is not readable'],
+  ['/config/pipe.json', 'must be a regular JSON file'],
+  ['/config/oversize.json', 'exceeds the']
+ ]) {
+  const result = spawnSync(process.execPath, ['dist/api/check-config.js'], {
+   env: { ...process.env, [label]: path }, encoding: 'utf8', timeout: 5000
+  })
+  assert.equal(result.error, undefined)
+  assert.equal(result.status, 1)
+  assert.ok(result.stderr.startsWith(label + ': '))
+  assert.ok(result.stderr.includes(reason))
+  assert.ok(!result.stderr.includes('SYNTHETIC_CONFIG_SECRET'))
+  assert.ok(!result.stderr.includes('/config'))
+ }
+}
+console.log('PASS: bounded mounted JSON diagnostics, UID10001 permissions, FIFO timeout and secret/path redaction')
+JS
 printf 'PASS: mounted OAuth JSON/domains, non-root, RO source/rootfs, Linux confinement, strict release gate; no live NAS ACL claim.\n'
