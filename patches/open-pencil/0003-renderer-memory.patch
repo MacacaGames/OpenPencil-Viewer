@@ -1,0 +1,290 @@
+--- a/packages/core/src/canvas/fills.ts
++++ b/packages/core/src/canvas/fills.ts
+@@ -1,3 +1,4 @@
++import { previewEdge } from '../../../../portal/upstream-adapter/image-memory'
+ import type { Canvas, Paint } from 'canvaskit-wasm'
+ 
+ import type { SceneNode, SceneGraph, Fill } from '@open-pencil/scene-graph'
+@@ -441,22 +442,29 @@
+ ): boolean {
+   const hash = fill.imageHash
+   if (!hash) return false
+-  let img = r.imageCache.get(hash)
++  const preview = r.viewportImageRendering
++    ? r.imagePreviews.get(graph, hash, previewEdge(node, r.zoom, r.dpr))
++    : undefined
++  if (r.viewportImageRendering && !preview) return false
++  const key = preview?.key ?? hash
++  let img = r.imageCache.get(key)
+   if (!img) {
+-    const data = graph.images.get(hash)
++    const data = preview?.preview.bytes ?? graph.images.get(hash)
+     if (!data) return false
+     const decoded = r.ck.MakeImageFromEncoded(data) ?? undefined
+     if (!decoded) return false
+     img = decoded.makeCopyWithDefaultMipmaps()
+     decoded.delete()
+-    r.imageCache.set(hash, img)
++    r.imageCache.set(key, img)
+   }
+ 
+   const imgW = img.width()
+   const imgH = img.height()
+   const scaleMode = fill.imageScaleMode ?? 'FILL'
+ 
+-  const localMatrix = makeImageFillLocalMatrix(r, fill, node, imgW, imgH)
++  const localMatrix = scaleMode === 'TILE' && !fill.imageTransform && preview
++    ? r.ck.Matrix.scaled(preview.preview.originalWidth / imgW, preview.preview.originalHeight / imgH)
++    : makeImageFillLocalMatrix(r, fill, node, imgW, imgH)
+ 
+   if (scaleMode === 'TILE') {
+     const shader = img.makeShaderCubic(
+@@ -466,7 +474,7 @@
+       1 / 3,
+       localMatrix
+     )
+-    r.fillPaint.setShader(shader)
++    try { r.fillPaint.setShader(shader) } finally { shader.delete() }
+     return true
+   }
+ 
+@@ -478,7 +486,7 @@
+     r.ck.MipmapMode.Linear,
+     localMatrix
+   )
+-  r.fillPaint.setShader(shader)
++  try { r.fillPaint.setShader(shader) } finally { shader.delete() }
+   return true
+ }
+ 
+--- a/packages/core/src/canvas/renderer/lifecycle.ts
++++ b/packages/core/src/canvas/renderer/lifecycle.ts
+@@ -30,7 +30,8 @@
+   if (r.destroyed) return
+   r.destroyed = true
+ 
+-  for (const img of r.imageCache.values()) img.delete()
++  r.onImagePreviewReady = null
++  r.imagePreviews.destroy()
+   r.imageCache.clear()
+   disposePathCaches(r)
+   r.fillPaint.delete()
+--- a/packages/core/src/canvas/renderer/pipeline.ts
++++ b/packages/core/src/canvas/renderer/pipeline.ts
+@@ -1,4 +1,5 @@
+ import type { Canvas } from 'canvaskit-wasm'
++import { useViewportImageRendering } from '../../../../../portal/upstream-adapter/image-memory'
+ 
+ import type { SceneGraph } from '@open-pencil/scene-graph'
+ import { computeDescendantVisualBounds } from '@open-pencil/scene-graph/geometry'
+@@ -17,14 +18,18 @@
+   pageId: string
+ ): void {
+   const prevViewport = r.worldViewport
++  const previewMode = r.viewportImageRendering
++  r.viewportImageRendering = false
+   r.worldViewport = { x: -1e9, y: -1e9, w: 2e9, h: 2e9 }
+-  const pageNode = graph.getNode(pageId)
+-  if (pageNode) {
+-    for (const childId of pageNode.childIds) {
+-      r.renderNode(canvas, graph, childId, {})
+-    }
+-  }
+-  r.worldViewport = prevViewport
++  try {
++    const pageNode = graph.getNode(pageId)
++    if (pageNode) {
++      for (const childId of pageNode.childIds) r.renderNode(canvas, graph, childId, {})
++    }
++  } finally {
++    r.worldViewport = prevViewport
++    r.viewportImageRendering = previewMode
++  }
+ }
+ 
+ export type RenderLayer = 'full' | 'scene' | 'overlays'
+@@ -41,6 +46,13 @@
+   layer: RenderLayer = 'full',
+   interactive = false
+ ): void {
++  r.viewportImageRendering = r.imagePreviews.enabled && useViewportImageRendering(graph)
++  if (r.imageMemoryGraph !== graph || (r.viewportImageRendering && r.imageMemoryPage !== state.currentPageId)) {
++    r.invalidateAllPictures()
++    r.imageCache.clear()
++    r.imageMemoryGraph = graph
++    r.imageMemoryPage = state.currentPageId
++  }
+   r.dpr = dpr
+   r.panX = state.panX
+   r.panY = state.panY
+@@ -140,7 +152,7 @@
+     graph.positionPreviewVersion !== r.scenePicturePositionPreviewVersion &&
+     sceneVersion === r.scenePictureVersion
+   const requiresUncachedSceneRender =
+-    interactive || hasPositionPreview || sceneContentDependsOnOverlay(overlays)
++    r.viewportImageRendering || interactive || hasPositionPreview || sceneContentDependsOnOverlay(overlays)
+   return {
+     requiresUncachedSceneRender,
+     canUsePicture: canUseScenePicture(r, graph, sceneVersion, requiresUncachedSceneRender),
+--- a/packages/core/src/canvas/renderer.ts
++++ b/packages/core/src/canvas/renderer.ts
+@@ -1,4 +1,5 @@
+ import { toUint8Array } from 'js-base64'
++import { DecodedImageCache, ImagePreviewCache } from '../../../../portal/upstream-adapter/image-memory'
+ 
+ import type { SceneNode, SceneGraph, Fill, Stroke } from '@open-pencil/scene-graph'
+ import type { RenderColorSpace, ResolvedRenderColor } from '@open-pencil/scene-graph/color'
+@@ -102,7 +103,12 @@
+     | undefined
+   pendingFontNodes = new Map<string, PendingFontNode>()
+   textPictureGenerations = new Map<string, { data: Uint8Array; generation: number }>()
+-  imageCache = new Map<string, CKImage>()
++  imageCache = new DecodedImageCache<CKImage>()
++  viewportImageRendering = false
++  imageMemoryGraph: SceneGraph | null = null
++  imageMemoryPage: string | null = null
++  onImagePreviewReady: (() => void) | null = null
++  imagePreviews = new ImagePreviewCache(() => this.onImagePreviewReady?.())
+   vectorPathCache = new Map<string, Path[]>()
+   vectorStrokePathCache = new Map<string, Path[]>()
+   vectorStrokeOutlineCache = new Map<string, Path[]>()
+--- a/packages/core/src/canvas/scene.ts
++++ b/packages/core/src/canvas/scene.ts
+@@ -485,7 +485,7 @@
+   graph: SceneGraph
+ ): void {
+   const hasEffects = node.effects.some((effect) => effect.visible)
+-  if (!hasEffects) {
++  if (r.viewportImageRendering || !hasEffects) {
+     r.renderShapeUncached(canvas, node, graph)
+     return
+   }
+--- a/packages/core/src/canvaskit.ts
++++ b/packages/core/src/canvaskit.ts
+@@ -4,6 +4,7 @@
+ import { IS_BROWSER } from './constants'
+ 
+ let instance: CanvasKit | null = null
++let initialization: Promise<CanvasKit> | null = null
+ 
+ export interface CanvasKitOptions {
+   locateFile?: (file: string) => string
+@@ -11,6 +12,7 @@
+ 
+ export async function getCanvasKit(options?: CanvasKitOptions): Promise<CanvasKit> {
+   if (instance) return instance
++  if (initialization) return initialization
+ 
+   const defaultLocate = (file: string) => {
+     if (!IS_BROWSER) {
+@@ -22,9 +24,14 @@
+     return `${prefix}/${file}`
+   }
+ 
+-  instance = await CanvasKitInit({
++  initialization = CanvasKitInit({
+     locateFile: options?.locateFile ?? defaultLocate
++  }).then((kit) => {
++    instance = kit
++    return kit
++  }).catch((error: unknown) => {
++    initialization = null
++    throw error
+   })
+-
+-  return instance
++  return initialization
+ }
+--- a/packages/vue/src/canvas/surface/lifecycle.ts
++++ b/packages/vue/src/canvas/surface/lifecycle.ts
+@@ -1,4 +1,5 @@
+ import type { CanvasKit } from 'canvaskit-wasm'
++import { createImagePreviewDecoder } from '../../../../../portal/upstream-adapter/image-preview'
+ import { onScopeDispose } from 'vue'
+ import type { Ref } from 'vue'
+ 
+@@ -50,7 +51,7 @@
+     { reloadFonts = false }: { reloadFonts?: boolean } = {}
+   ) {
+     const ck = getCanvasKit()
+-    if (!ck) return
++    if (!ck || canvas.clientWidth <= 0 || canvas.clientHeight <= 0) return
+ 
+     if (state.renderer) editor.removeCanvasRenderer(state.renderer)
+     state.renderer?.destroy()
+@@ -78,6 +79,8 @@
+ 
+     const glCtx = canvas.getContext('webgl2') ?? null
+     state.renderer = new SkiaRenderer(ck, surface, glCtx)
++    state.renderer.onImagePreviewReady = () => renderLoop.markDirty()
++    state.renderer.imagePreviews.setDecoder(createImagePreviewDecoder())
+     state.renderer.presentationColorSpace = result.presentation ?? 'srgb'
+     state.renderer.tracksSceneSettlement = options?.layer !== 'overlays'
+     state.renderer.tiledSceneEnabled = options?.sceneRenderer === 'tiled'
+@@ -88,8 +91,8 @@
+     // has cleared the module-level fontProvider — the new renderer must reload.
+     // On initial mount, kit-loader.init() handles loadFonts, so skip here.
+     if (reloadFonts && !isDestroyed()) {
+-      void state.renderer.loadFonts(renderNow).then(() => {
+-        if (!isDestroyed()) renderNow()
++      void state.renderer.loadFonts(() => renderLoop.markDirty()).then(() => {
++        if (!isDestroyed()) renderLoop.markDirty()
+         return undefined
+       })
+     }
+@@ -134,6 +137,11 @@
+   })
+ 
+   function resizeCanvas(canvas: HTMLCanvasElement) {
++    const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1
++    const width = Math.floor(canvas.clientWidth * dpr)
++    const height = Math.floor(canvas.clientHeight * dpr)
++    if (width <= 0 || height <= 0) return
++    if (state.renderer && canvas.width === width && canvas.height === height) return
+     const ck = getCanvasKit()
+     if (!ck || !state.renderer) {
+       createSurface(canvas)
+@@ -222,7 +230,7 @@
+     lifecycle,
+     setCanvasKit,
+     createSurface: surface.createSurface,
+-    loadFonts: () => surface.getRenderer()?.loadFonts(surface.renderNow),
++    loadFonts: () => surface.getRenderer()?.loadFonts(surface.markDirty),
+     renderNow: surface.renderNow,
+     onReady
+   })
+--- a/packages/vue/src/canvas/surface/render-loop.ts
++++ b/packages/vue/src/canvas/surface/render-loop.ts
+@@ -59,6 +59,7 @@
+ ) {
+   const getRenderState = options.getRenderState ?? (() => editor.state)
+   const scheduler = getRenderScheduler(editor)
++  let paused = false
+   let dirty = true
+   let frameScheduled = false
+   let lastRenderVersion = -1
+@@ -67,6 +68,7 @@
+ 
+   function renderFrame() {
+     frameScheduled = false
++    if (paused) return
+     const state = getRenderState()
+     if (options.shouldSuspendRender?.() === true) {
+       dirty = true
+@@ -84,7 +86,7 @@
+   }
+ 
+   const scheduleFrame = () => {
+-    if (frameScheduled) return
++    if (paused || frameScheduled) return
+     frameScheduled = true
+     scheduler.schedule(renderFrame)
+   }
+@@ -112,6 +114,7 @@
+   }
+ 
+   function pause() {
++    paused = true
+     for (const off of unsubscribe) off()
+     if (frameScheduled) {
+       scheduler.cancel(renderFrame)

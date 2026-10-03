@@ -1,16 +1,29 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
-import { useKeyboard } from '@/app/shell/keyboard/use'
+import {
+  ref,
+  onMounted,
+  onUnmounted,
+  nextTick,
+  defineAsyncComponent
+} from 'vue'
 import { createTab } from '@/app/tabs'
-import EditorWorkspace from '@/components/editor/EditorWorkspace.vue'
-import FontStatusBanner from '@/components/font-status/FontStatusBanner.vue'
+import { useKeyboard } from '@/app/shell/keyboard/use'
+import { loadScene } from '../../portal/upstream-adapter/editor'
+import { readDownload } from '../../portal/transport/download'
+import { MAX_SCENE_BYTES, SCENE_TYPE } from '../../portal/transport/scene-wire'
+import RasterViewer from '../../portal/upstream-adapter/RasterViewer.vue'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 import type { FileRecord } from '../../portal/contracts/index'
-import { loadScene } from '../../portal/upstream-adapter/editor'
-import { MAX_SCENE_BYTES, SCENE_TYPE } from '../../portal/transport/scene-wire'
-import { readDownload } from '../../portal/transport/download'
+import type { ViewerManifest } from '../../portal/contracts/viewer'
+const manifest = ref<ViewerManifest | null>(null)
+const documentId = ref('')
+const revision = ref('')
+const native = ref(false)
 const editor = createTab().store
 useKeyboard()
+const EditorWorkspace = defineAsyncComponent(
+  () => import('@/components/editor/EditorWorkspace.vue')
+)
 const me = ref<{
     email: string
     csrf: string
@@ -36,6 +49,7 @@ function dispose() {
   if (disposed) return
   disposed = true
   abort.abort()
+  manifest.value = null
   editor.dispose()
 }
 function pageHidden() {
@@ -145,11 +159,14 @@ onMounted(async () => {
   window.addEventListener('pagehide', pageHidden)
   window.addEventListener('pageshow', pageShown)
   try {
-    const mode = await api<{ provider: string; authorization: string }>(
-      '/auth/mode'
-    )
+    const mode = await api<{
+      provider: string
+      authorization: string
+      viewer: string
+    }>('/auth/mode')
     provider.value = mode.provider
     authorization.value = mode.authorization
+    native.value = mode.viewer === 'native'
     await refresh()
     if (!viewing.value) return
     const id = new URLSearchParams(location.search).get('id')
@@ -159,30 +176,38 @@ onMounted(async () => {
     )
     name.value = metadata.name
     await nextTick()
-    progress.value = '伺服器解析文件'
-    const response = await fetch(
-      '/api/files/' + encodeURIComponent(id) + '/scene',
-      { credentials: 'same-origin', cache: 'no-store', signal: abort.signal }
-    )
-    if (response.status === 429)
-      throw new Error('伺服器正在解析其他文件，請稍後重試')
-    if (!response.ok) throw new Error('文件不可讀、解析失敗或來源離線')
-    if (response.headers.get('X-Document-Revision') !== metadata.revision)
-      throw new Error('文件已變更，請重新開啟')
-    if (response.headers.get('Content-Type') !== SCENE_TYPE)
-      throw new Error('場景服務不可用')
-    const bytes = await readDownload(
-      response,
-      Number(response.headers.get('Content-Length')),
-      MAX_SCENE_BYTES,
-      abort.signal,
-      (read, size) => {
-        progress.value = `載入場景 ${Math.round((read / size) * 100)}%`
-      }
-    )
-    await loadScene(editor, bytes, metadata.name, abort.signal, (phase) => {
-      progress.value = phase
-    })
+    documentId.value = id
+    revision.value = metadata.revision
+    if (native.value) {
+      progress.value = '載入開發驗證場景'
+      const response = await fetch(
+        '/api/files/' + encodeURIComponent(id) + '/scene',
+        { credentials: 'same-origin', cache: 'no-store', signal: abort.signal }
+      )
+      if (
+        response.headers.get('Content-Type') !== SCENE_TYPE ||
+        response.headers.get('X-Document-Revision') !== metadata.revision
+      )
+        throw new Error('場景不可用或來源已變更')
+      const bytes = await readDownload(
+        response,
+        Number(response.headers.get('Content-Length')),
+        MAX_SCENE_BYTES,
+        abort.signal,
+        () => undefined
+      )
+      await loadScene(editor, bytes, metadata.name, abort.signal, (phase) => {
+        progress.value = phase
+      })
+    } else {
+      progress.value = '伺服器準備預覽'
+      manifest.value = await api<ViewerManifest>(
+        '/api/files/' +
+          encodeURIComponent(id) +
+          '/viewer?revision=' +
+          encodeURIComponent(metadata.revision)
+      )
+    }
     ready.value = true
     progress.value = ''
   } catch (err) {
@@ -235,10 +260,9 @@ onUnmounted(() => {
     <div v-if="!me" class="mx-auto my-16 flex max-w-lg flex-col gap-5 px-8">
       <h1 class="text-xl font-semibold">登入設計文件入口</h1>
       <p v-if="authorization === 'google-mount'">
-        Google Workspace 登入後可瀏覽此入口掛載的所有設計文件，使用原生
-        OpenPencil 唯讀檢視。
+        Google Workspace 登入後可瀏覽此入口掛載的所有設計文件，使用唯讀 viewer。
       </p>
-      <p v-else>依你的 NAS 權限瀏覽 .fig，使用原生 OpenPencil 唯讀檢視。</p>
+      <p v-else>依你的 NAS 權限瀏覽 .fig，使用唯讀 viewer。</p>
       <template v-if="provider === 'mock'">
         <p class="text-sm text-muted">
           本機 Mock：僅有合成文件，未驗證 DSM ACL。
@@ -335,8 +359,13 @@ onUnmounted(() => {
           取消
         </button>
       </div>
-      <FontStatusBanner v-if="ready" />
-      <EditorWorkspace />
+      <RasterViewer
+        v-if="manifest && me"
+        :manifest="manifest"
+        :document-id="documentId"
+        :revision="revision"
+      />
+      <EditorWorkspace v-else-if="native" />
     </template>
     <AppAlert
       v-if="error"

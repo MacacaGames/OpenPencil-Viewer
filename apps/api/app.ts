@@ -5,6 +5,8 @@ import { bodyLimit } from 'hono/body-limit'
 import { Readable } from 'node:stream'
 import { parseScene, SceneCache } from './scene.ts'
 import { SCENE_TYPE } from '../../packages/transport/scene-wire.ts'
+import { ViewerRenderer } from './viewer.ts'
+import { parseViewport } from '../../packages/contracts/viewer.ts'
 import type { JWTVerifyGetKey } from 'jose'
 import { constants, openSync, closeSync, fstatSync, readSync } from 'node:fs'
 import { NasBridge } from '../../packages/nas-bridge/index.ts'
@@ -50,6 +52,7 @@ export function createPortal(
     state = new State(config.statePath),
     index = options.index ?? new FileIndex(config.roots, config.maxFileBytes)
   const scenes = new SceneCache()
+  const viewer = new ViewerRenderer(config.webPath)
   let parsing = false
   try {
     if (!options.index) index.restore(state.loadIndex())
@@ -291,7 +294,11 @@ export function createPortal(
   app.get('/auth/mode', (c) =>
     c.json({
       provider: config.identityProvider,
-      authorization: config.authorizationMode
+      authorization: config.authorizationMode,
+      viewer:
+        config.environment === 'production'
+          ? 'raster'
+          : (config.viewerMode ?? 'native')
     })
   )
   app.use(
@@ -454,9 +461,73 @@ export function createPortal(
     await authorize(principal, c.req.param('id'))
     throw new AppError('thumbnail-unavailable', 404)
   })
+  for (const endpoint of ['viewer', 'viewport'])
+    app.get('/api/files/:id/' + endpoint, async (c) => {
+      const cookie = getCookie(c, cookieName)
+      const { principal } = await identify(cookie)
+      const record = await authorize(principal, c.req.param('id') ?? '')
+      if (record.kind !== 'file') throw new AppError('not-found', 404)
+      const query = c.req.query()
+      const { revision, ...viewportQuery } = query
+      if (revision !== record.revision)
+        throw new AppError('source-changed', 409)
+      const view =
+        endpoint === 'viewport' ? parseViewport(viewportQuery) : undefined
+      const stat = async () => {
+        if (bridge) await bridge.stat(principal, record)
+        else if (authz.stat) await authz.stat(principal, record)
+        else await index.stat(record)
+      }
+      await stat()
+      const signal = AbortSignal.any([
+        c.req.raw.signal,
+        AbortSignal.timeout(60000)
+      ])
+      const source = () =>
+        bridge
+          ? bridge.open(principal, record, signal)
+          : authz.open
+            ? authz.open(principal, record, signal)
+            : index.open(record, signal)
+      const result = await viewer.run(
+        record.id + ':' + record.revision,
+        source,
+        record.size,
+        signal,
+        view
+      )
+      const current = await identify(cookie)
+      await authorize(current.principal, record.id)
+      await stat()
+      signal.throwIfAborted()
+      state.audit(principal.key, record.id, 'read')
+      c.header('X-Document-Revision', record.revision)
+      c.header('X-Viewer-Cache', result.cached ? 'hit' : 'miss')
+      if (result.manifest) {
+        const json = JSON.stringify(result.manifest)
+        if (Buffer.byteLength(json) > 2097152)
+          throw new AppError('viewer-manifest-limit', 413)
+        c.header('Content-Length', String(Buffer.byteLength(json)))
+        return c.body(json, 200, {
+          'Content-Type': 'application/json; charset=utf-8'
+        })
+      }
+      if (!result.image) throw new AppError('viewer-render-failed', 422)
+      return new Response(result.image, {
+        headers: {
+          'Content-Type': 'image/webp',
+          'Content-Length': String(result.image.length),
+          'Cache-Control': 'no-store',
+          'X-Document-Revision': record.revision,
+          'X-Viewer-Cache': result.cached ? 'hit' : 'miss'
+        }
+      })
+    })
   app.get('/api/files/:id/scene', async (c) => {
     const { principal } = await identify(getCookie(c, cookieName))
     const record = await authorize(principal, c.req.param('id'))
+    if (config.environment === 'production')
+      throw new AppError('full-scene-disabled', 410)
     if (record.kind !== 'file') throw new AppError('not-found', 404)
     const stat = async () => {
       if (bridge) await bridge.stat(principal, record)
@@ -607,6 +678,7 @@ export function createPortal(
       )
     },
     close() {
+      viewer.close()
       state.close()
     }
   }

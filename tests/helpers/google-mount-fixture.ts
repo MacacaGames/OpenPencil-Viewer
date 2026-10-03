@@ -24,7 +24,11 @@ export function fixtureCode(
   )
 }
 
-export async function createGoogleFixture(base: string, port = 3213) {
+export async function createGoogleFixture(
+  base: string,
+  port = 3213,
+  options: { viewerMode?: 'raster'; sourceRoot?: string } = {}
+) {
   const source = resolve(base, 'source'),
     secondary = resolve(base, 'secondary')
   mkdirSync(source + '/nested', { recursive: true })
@@ -43,11 +47,16 @@ export async function createGoogleFixture(base: string, port = 3213) {
     port,
     identityProvider: 'google-oidc',
     authorizationMode: 'google-mount',
+    viewerMode: options.viewerMode,
     allowedHostedDomains: ['fixture.example'],
     statePath: resolve(base, 'state.sqlite'),
-    webPath: resolve('dist/web'),
+    webPath: resolve(process.env.PORTAL_TEST_WEB_PATH ?? 'dist/web'),
     roots: [
-      { id: 'designs', label: 'Synthetic designs', path: source },
+      {
+        id: 'designs',
+        label: 'Synthetic designs',
+        path: options.sourceRoot ?? source
+      },
       { id: 'secondary', label: 'Synthetic second root', path: secondary }
     ],
     maxFileBytes: 536870912,

@@ -1,5 +1,7 @@
 # Google 登入後共用瀏覽驗證
 
+> 2026-10-03 更新：正式 viewer 已改為伺服器渲染，只傳目前視窗 WebP 與頁面摘要；完整 `/scene` 在 production 回覆410。本文保留先前階段紀錄，最新部署與限制請見 [RASTER_VIEWER.md](RASTER_VIEWER.md)。
+
 操作員於2026-10-03 明確要求先略過 NAS 身份對應／權限分流，只要合法 Google 登入即可瀏覽掛載來源並驗證開啟 .fig。新增明確設定 `authorizationMode: google-mount`；原有 dsm-strict 不會自動降級。
 
 這個模式接受設定內 allowedHostedDomains 的 Google Workspace 身份（目前 macaca.games），仍檢查 Google RS256 簽章、issuer、audience、expiry、nonce、email_verified、hd 與 OAuth state／PKCE。不是任意 Gmail、匿名或 Mock 登入。每位合法登入者可瀏覽全部設定 roots 的資料夾與合格 .fig；沒有 DSM 個別權限或 NAS 帳號綁定。UID10001 仍須能讀取掛載來源，無法繞過容器本身的 EACCES。

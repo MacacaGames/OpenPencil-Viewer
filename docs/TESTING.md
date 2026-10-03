@@ -30,6 +30,10 @@ OIDC tests 用本機 RSA 簽署 JWT + JOSE 驗證 signature／issuer／audience�
 
 Adapter test 在 `.work/editor` 以實際 patched Core、SceneGraph 及 Vue commands 執行：default-deny mutators／direct command.run／nested node arrays／pre-lock references；selection、zoom、page navigation 可用。Native selected-node inspector 用獨立 clone，不能修改 locked graph。實際 Vue variables panel 在鎖定後仍能讀取集合／數值與刷新；nested variable／mode 修改及 mutators 均無效。
 
+同一命令也跑 renderer／surface regressions：並發 CanvasKit 初始化與失敗重試、native image LRU／mipmap 成本／一次性釋放、preview 串行與去重／原圖保留／encoded cache／dispose、font 通知合併與禁止同步重入、零尺寸與同尺寸 surface 保留、full-resolution render 的 finally 還原。Mocks 以獨立 Bun process 執行，避免影響真實唯讀 graph 測試。
+
+`tests/e2e/renderer.spec.ts` 用 129 個合成圖片資源觸發 viewport previews，先確認實際紅色像素與 worker 啟動，再對 FIT／TILE、resize、換頁、重開比對已保存的 canvas snapshot。調整像素行為時先用 `npm run test:e2e -- tests/e2e/renderer.spec.ts --update-snapshots` 更新並視覺檢查，再移除該旗標重跑。這不代表真實大型文件的 GPU／記憶體或保真驗收。
+
 Playwright E2E 使用獨立 port 3212、`.work/e2e-*`，一個 Chromium worker：首頁不取任何 content；A/B 名稱不同；double click 只載一份文件；保留兩頁導航、layers 選取與 native properties Design/Code；code readonly／AI 不顯示。Ctrl/Cmd+S、paste/drop、delete、draw tool、drag 後重新選取，比較 canvas pixels，hash/mtime 不變；無外部 HTTP/WS、document IndexedDB／SW、換帳號舊 canvas。Trace/video 預設 off；`.work/portal-native.png` 只有合成設計。
 
 FIG safety tests 包括合法合成 FIG、archive bomb／malformed nested/schema／truncated payload；workers 有 abort/timeout，拒絕無 worker 的 main-thread fallback。大檔實際 parse/layout/GPU 資源仍需 live 代表性測試；輸入限制不等於所有 parser 漏洞已排除。

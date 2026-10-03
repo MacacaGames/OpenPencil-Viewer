@@ -5,6 +5,7 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   timeout: 90000,
+  snapshotPathTemplate: '{testDir}/snapshots/{testFilePath}/{arg}{ext}',
   use: {
     baseURL: origin,
     testIdAttribute: 'data-test-id',
@@ -39,6 +40,13 @@ export default defineConfig({
       command: 'node --import tsx tests/e2e/google-mount-server.ts',
       cwd: import.meta.dirname,
       url: 'http://127.0.0.1:3213/health/ready',
+      reuseExistingServer: false,
+      timeout: 30000
+    },
+    {
+      command: 'node --import tsx tests/e2e/raster-server.ts',
+      cwd: import.meta.dirname,
+      url: 'http://127.0.0.1:3214/health/ready',
       reuseExistingServer: false,
       timeout: 30000
     }

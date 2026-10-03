@@ -1,5 +1,7 @@
 # 伺服器解析與原生唯讀 UI
 
+> 2026-10-03 更新：正式 viewer 已改為伺服器渲染，只傳目前視窗 WebP 與頁面摘要；完整 `/scene` 在 production 回覆410。本文保留先前階段紀錄，最新部署與限制請見 [RASTER_VIEWER.md](RASTER_VIEWER.md)。
+
 原始 `.fig` 只由伺服器透過既有授權／descriptor reader 讀取。正式模式的 `/api/files/:id/content` 不提供原始檔，GET／HEAD 均拒絕；前端使用 `/api/files/:id/scene`。既有原始 transport 僅保留於 development，供合成 confinement probes 使用。
 
 伺服器在隔離的 Node worker 執行安全檢查、FIG 解碼與全部頁面場景建構，傳送版本化 ZIP 場景：JSON 結構、去重的 binary 圖片／幾何資源。原始 archive、Kiwi schema 與 lazy original-source context 不傳送。瀏覽器 worker 解開場景，原生 OpenPencil UI 準備字型／layout，鎖定 graph 後顯示。頁面、圖層、選取、縮放保留；不啟用編輯、匯出、持久化或外部文件流量。

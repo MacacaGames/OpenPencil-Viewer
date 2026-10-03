@@ -9,6 +9,7 @@ const schema = v.strictObject({
   port: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535)),
   identityProvider: v.picklist(['mock', 'google-oidc']),
   authorizationMode: v.picklist(['mock', 'dsm-strict', 'google-mount']),
+  viewerMode: v.optional(v.picklist(['raster', 'native'])),
   allowedHostedDomains: v.pipe(
     v.array(
       v.pipe(
@@ -54,6 +55,8 @@ export type Config = v.InferOutput<typeof schema>
 export function parseConfig(raw: unknown): Config {
   const config = v.parse(schema, raw)
   const origin = new URL(config.origin)
+  if (config.environment === 'production' && config.viewerMode === 'native')
+    throw new Error('production uses the server-rendered viewer')
   if (origin.origin !== config.origin || origin.username || origin.password)
     throw new Error('origin must be an exact origin')
   if (

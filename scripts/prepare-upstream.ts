@@ -1,9 +1,9 @@
 import { mkdirSync, readFileSync, cpSync, readdirSync, rmSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { root, run, bun } from './common.ts'
+import { root, run, bun, editorRoot } from './common.ts'
 import { verifyUpstream } from './verify-upstream.ts'
 verifyUpstream()
-const target = root + '/.work/editor'
+const target = editorRoot
 mkdirSync(target, { recursive: true })
 // Preserve only the package cache. A source removed by a future pinned commit
 // must not remain discoverable by Vue/Vite in the disposable build tree.

@@ -236,22 +236,66 @@ test('production never serves original FIG, scene cache cannot bypass changed-so
         410
       )
     assert.equal((await portal.app.request(url + '/scene')).status, 401)
-    const response = await portal.app.request(url + '/scene', { headers })
-    assert.equal(response.status, 200)
-    await response.arrayBuffer()
     assert.equal(
-      (await portal.app.request(url + '/scene', { headers })).headers.get(
-        'X-Scene-Cache'
+      (await portal.app.request(url + '/scene', { headers })).status,
+      410
+    )
+    const metadata = await (await portal.app.request(url, { headers })).json()
+    const manifestPath =
+      url + '/viewer?revision=' + encodeURIComponent(metadata.revision)
+    assert.equal((await portal.app.request(manifestPath)).status, 401)
+    const response = await portal.app.request(manifestPath, { headers })
+    assert.equal(response.status, 200)
+    const manifest = await response.json()
+    assert.equal(manifest.pages.length, 2)
+    assert.ok(JSON.stringify(manifest).length < 2048)
+    const viewPath =
+      url +
+      '/viewport?' +
+      new URLSearchParams({
+        revision: metadata.revision,
+        page: manifest.pages[0].id,
+        x: '0',
+        y: '0',
+        scale: '1',
+        width: '1024',
+        height: '768'
+      })
+    const image = await portal.app.request(viewPath, { headers })
+    assert.equal(image.status, 200)
+    assert.equal(image.headers.get('Content-Type'), 'image/webp')
+    assert.ok((await image.arrayBuffer()).byteLength < 65536)
+    assert.equal(
+      (await portal.app.request(viewPath, { headers })).headers.get(
+        'X-Viewer-Cache'
       ),
       'hit'
+    )
+    assert.equal(
+      (
+        await portal.app.request(
+          viewPath.replace('width=1024', 'width=100000'),
+          { headers }
+        )
+      ).status,
+      400
+    )
+    assert.equal(
+      (
+        await portal.app.request(
+          viewPath.replace(
+            'page=' + encodeURIComponent(manifest.pages[0].id),
+            'page=not-a-page'
+          ),
+          { headers }
+        )
+      ).status,
+      404
     )
     // FileIndex's descriptor/revision validation still runs on a cache hit.
     const { writeFileSync } = await import('node:fs')
     writeFileSync(s.source + '/A.fig', 'changed synthetic document')
-    assert.equal(
-      (await portal.app.request(url + '/scene', { headers })).status,
-      503
-    )
+    assert.equal((await portal.app.request(viewPath, { headers })).status, 503)
   } finally {
     portal.close()
     s.close()
