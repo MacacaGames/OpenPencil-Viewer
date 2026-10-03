@@ -1,0 +1,22 @@
+diff --git a/packages/core/package.json b/packages/core/package.json
+index 8bbc69c..d7506ae 100644
+--- a/packages/core/package.json
++++ b/packages/core/package.json
+@@ -151,6 +151,11 @@
+       "types": "./dist/layout.d.ts",
+       "import": "./dist/layout.js",
+       "default": "./dist/layout.js"
++    },
++    "./scene-transfer": {
++      "types": "./dist/scene-transfer.d.ts",
++      "import": "./dist/scene-transfer.js",
++      "default": "./dist/scene-transfer.js"
+     }
+   },
+   "publishConfig": {
+diff --git a/packages/core/src/scene-transfer.ts b/packages/core/src/scene-transfer.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/core/src/scene-transfer.ts
+@@ -0,0 +1 @@
++export { serializeSceneGraph, deserializeSceneGraph, type SerializedSceneGraph } from './kiwi/fig/parse/transfer'

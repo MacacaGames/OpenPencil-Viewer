@@ -51,6 +51,7 @@ else: raise AssertionError("source write allowed")'
 [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$TASK_CONTAINER")" = true ]
 [ "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/designs"}}{{.RW}}{{end}}{{end}}' "$TASK_CONTAINER")" = false ]
 docker exec -i "$TASK_CONTAINER" python3 - < tests/container/filesystem.py
+cp tests/fixtures/basic.fig "$TASK_DIR/source/valid.fig"
 TASK_STATUS=0
 docker exec "$TASK_CONTAINER" node dist/api/check-config.js || TASK_STATUS=$?
 [ "$TASK_STATUS" -eq 2 ]
@@ -125,13 +126,22 @@ try {
   for (const excluded of ['outside.fig', 'link.fig', 'pipe.fig', 'hard.fig'])
     assert.ok(!listing.items.some(item => item.name === excluded))
   const path = base + '/api/files/' + file.id + '/content'
-  assert.equal((await fetch(path, { method: 'HEAD', headers })).status, 200)
+  assert.equal((await fetch(path, { method: 'HEAD', headers })).status, 410)
   const content = await fetch(path, { headers })
-  assert.equal(content.status, 200)
-  assert.equal(await content.text(), 'SYNTHETIC ONLY')
+  assert.equal(content.status, 410)
+  assert.equal((await fetch(base + '/api/files/' + file.id + '/scene', { headers })).status, 422)
+  const valid = listing.items.find(item => item.name === 'valid.fig')
+  assert.ok(valid)
+  const scenePath = base + '/api/files/' + valid.id + '/scene'
+  const scene = await fetch(scenePath, { headers })
+  assert.equal(scene.status, 200)
+  assert.equal(scene.headers.get('Content-Type'), 'application/vnd.openpencil.scene+zip')
+  const packed = new Uint8Array(await scene.arrayBuffer())
+  assert.deepEqual([...packed.subarray(0, 2)], [80, 75])
+  assert.equal((await fetch(scenePath, { headers })).headers.get('X-Scene-Cache'), 'hit')
   for (const method of ['PUT', 'POST', 'DELETE', 'PATCH'])
     assert.equal((await fetch(path, { method, headers })).status, 404)
-  console.log('PASS: UID10001 production shared profile, no directory/bindings, login gate, Linux RO content and confinement (synthetic session only)')
+  console.log('PASS: UID10001 production shared profile, no directory/bindings, login gate, raw-FIG denied, invalid FIG parse rejected and Linux confinement (synthetic session only)')
 } finally { child.kill('SIGTERM'); await exit }
 JS
 printf 'PASS: mounted OAuth JSON/domains, non-root, RO source/rootfs, Linux confinement, strict release gate; no live NAS ACL claim.\n'

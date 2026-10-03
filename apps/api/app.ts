@@ -3,6 +3,8 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import { bodyLimit } from 'hono/body-limit'
 import { Readable } from 'node:stream'
+import { parseScene, SceneCache } from './scene.ts'
+import { SCENE_TYPE } from '../../packages/transport/scene-wire.ts'
 import type { JWTVerifyGetKey } from 'jose'
 import { constants, openSync, closeSync, fstatSync, readSync } from 'node:fs'
 import { NasBridge } from '../../packages/nas-bridge/index.ts'
@@ -47,6 +49,8 @@ export function createPortal(
   const app = new Hono(),
     state = new State(config.statePath),
     index = options.index ?? new FileIndex(config.roots, config.maxFileBytes)
+  const scenes = new SceneCache()
+  let parsing = false
   try {
     if (!options.index) index.restore(state.loadIndex())
   } catch (error) {
@@ -450,9 +454,60 @@ export function createPortal(
     await authorize(principal, c.req.param('id'))
     throw new AppError('thumbnail-unavailable', 404)
   })
+  app.get('/api/files/:id/scene', async (c) => {
+    const { principal } = await identify(getCookie(c, cookieName))
+    const record = await authorize(principal, c.req.param('id'))
+    if (record.kind !== 'file') throw new AppError('not-found', 404)
+    const stat = async () => {
+      if (bridge) await bridge.stat(principal, record)
+      else if (authz.stat) await authz.stat(principal, record)
+      else await index.stat(record)
+    }
+    await stat()
+    const key = record.id + ':' + record.revision
+    let packed = scenes.get(key)
+    const cached = Boolean(packed)
+    if (!packed) {
+      if (parsing) throw new AppError('scene-busy', 429)
+      parsing = true
+      const signal = AbortSignal.any([
+        c.req.raw.signal,
+        AbortSignal.timeout(60000)
+      ])
+      try {
+        const source = bridge
+          ? await bridge.open(principal, record, signal)
+          : authz.open
+            ? await authz.open(principal, record, signal)
+            : await index.open(record, signal)
+        packed = await parseScene(source, record.size, signal)
+        // No cache or result after a changed source, expired identity or revoked permission.
+        const current = await identify(getCookie(c, cookieName))
+        await authorize(current.principal, record.id)
+        await stat()
+        signal.throwIfAborted()
+        scenes.put(key, packed)
+      } finally {
+        parsing = false
+      }
+    }
+    state.audit(principal.key, record.id, 'read')
+    return new Response(packed, {
+      headers: {
+        'Content-Type': SCENE_TYPE,
+        'Content-Length': String(packed.length),
+        'Cache-Control': 'no-store',
+        'X-Document-Revision': record.revision,
+        'X-Scene-Cache': cached ? 'hit' : 'miss'
+      }
+    })
+  })
   app.on(['GET', 'HEAD'], '/api/files/:id/content', async (c) => {
     const { principal } = await identify(getCookie(c, cookieName))
     const record = await authorize(principal, c.req.param('id'))
+    // Raw transport remains solely for existing development confinement probes.
+    if (config.environment === 'production')
+      throw new AppError('raw-content-disabled', 410)
     if (record.kind !== 'file') throw new AppError('not-found', 404)
     if (c.req.method === 'HEAD') {
       if (bridge) await bridge.stat(principal, record)

@@ -10,8 +10,10 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
+import { digest } from '../../apps/api/state.ts'
 import { createPortal } from '../../apps/api/app.ts'
 import { fileId } from '../../packages/filesystem/index.ts'
+import { decodeScene, SCENE_TYPE } from '../../packages/transport/scene-wire.ts'
 import {
   createGoogleFixture,
   fixtureCode
@@ -86,6 +88,28 @@ test('Google-only shared mount: signed callback, all roots/FIGs, no directory/bi
     await s.portal.scan()
     for (const cookie of [A.cookie, B.cookie]) {
       const headers = { Cookie: cookie }
+      const scene = await request('/api/files/' + id + '/scene', { headers })
+      assert.equal(scene.status, 200)
+      assert.equal(scene.headers.get('Content-Type'), SCENE_TYPE)
+      assert.equal(
+        scene.headers.get('X-Scene-Cache'),
+        cookie === A.cookie ? 'miss' : 'hit'
+      )
+      const decoded = decodeScene(
+        new Uint8Array(await scene.arrayBuffer())
+      ) as {
+        graph: {
+          nodes: Array<[string, { type: string }]>
+          figSchemaDeflated: null
+          lazyFigImport?: unknown
+        }
+      }
+      assert.equal(
+        decoded.graph.nodes.filter(([, n]) => n.type === 'CANVAS').length,
+        2
+      )
+      assert.equal(decoded.graph.figSchemaDeflated, null)
+      assert.equal(decoded.graph.lazyFigImport, undefined)
       const roots = await (await request('/api/roots', { headers })).json()
       assert.equal(roots.items.length, 2)
       const all = await (await request('/api/search', { headers })).json()
@@ -143,17 +167,93 @@ test('Google-only shared mount: signed callback, all roots/FIGs, no directory/bi
       (await request(path, { headers: { Cookie: A.cookie } })).status,
       401
     )
+    assert.equal(
+      (
+        await request('/api/files/' + id + '/scene', {
+          headers: { Cookie: A.cookie }
+        })
+      ).status,
+      401
+    )
     // Changing allowed Workspace domains revokes an existing shared session.
     s.config.allowedHostedDomains = ['other.example']
     assert.equal(
       (await request(path, { headers: { Cookie: B.cookie } })).status,
       403
     )
+    assert.equal(
+      (
+        await request('/api/files/' + id + '/scene', {
+          headers: { Cookie: B.cookie }
+        })
+      ).status,
+      401
+    )
     const row = s.portal.state.db
       .prepare('SELECT count(*) AS n FROM sessions')
       .get()
     assert.equal(row?.n, 0)
   } finally {
+    s.close()
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('production never serves original FIG, scene cache cannot bypass changed-source validation', async () => {
+  const base = realpathSync(mkdtempSync(resolve(tmpdir(), 'production-scene-')))
+  const s = await createGoogleFixture(base)
+  const identity = {
+    iss: 'https://accounts.google.com',
+    sub: 'synthetic',
+    email: 'a@fixture.example',
+    hd: 'fixture.example'
+  }
+  const token = s.portal.state.createGoogleMountSession(identity, {
+    key: 'google:' + digest(identity.iss + '\0' + identity.sub),
+    generation: 'google-mount-v1',
+    username: identity.email,
+    email: identity.email,
+    enabled: true,
+    trustedEmail: true,
+    system: false,
+    groups: []
+  })
+  s.close()
+  const portal = createPortal({
+    ...s.config,
+    environment: 'production',
+    origin: 'https://fixture.example'
+  })
+  try {
+    await portal.scan()
+    const url =
+      'https://fixture.example/api/files/' + fileId('designs', 'A.fig')
+    const headers = { Cookie: '__Host-portal=' + token }
+    for (const method of ['GET', 'HEAD'])
+      assert.equal(
+        (await portal.app.request(url + '/content', { method, headers }))
+          .status,
+        410
+      )
+    assert.equal((await portal.app.request(url + '/scene')).status, 401)
+    const response = await portal.app.request(url + '/scene', { headers })
+    assert.equal(response.status, 200)
+    await response.arrayBuffer()
+    assert.equal(
+      (await portal.app.request(url + '/scene', { headers })).headers.get(
+        'X-Scene-Cache'
+      ),
+      'hit'
+    )
+    // FileIndex's descriptor/revision validation still runs on a cache hit.
+    const { writeFileSync } = await import('node:fs')
+    writeFileSync(s.source + '/A.fig', 'changed synthetic document')
+    assert.equal(
+      (await portal.app.request(url + '/scene', { headers })).status,
+      503
+    )
+  } finally {
+    portal.close()
     s.close()
     rmSync(base, { recursive: true, force: true })
   }

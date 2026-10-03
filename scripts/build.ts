@@ -28,3 +28,18 @@ await build({
   outdir: root + '/dist/api',
   packages: 'external'
 })
+await build({
+  entryPoints: [root + '/packages/upstream-adapter/server-parser.ts'],
+  bundle: true,
+  platform: 'node',
+  target: 'node22',
+  format: 'esm',
+  outfile: root + '/dist/api/scene-parser.js',
+  alias: {
+    '@open-pencil/core/io/formats/fig':
+      root + '/.work/editor/packages/core/dist/io/formats/fig/index.js',
+    '@open-pencil/core/scene-transfer':
+      root + '/.work/editor/packages/core/dist/kiwi/fig/parse/transfer.js'
+  },
+  nodePaths: [root + '/.work/editor/node_modules']
+})

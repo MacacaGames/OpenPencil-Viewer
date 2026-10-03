@@ -8,13 +8,14 @@ test('A/B lists, double click native UI, readonly gestures, no external requests
     content: string[] = [],
     errors: string[] = []
   page.on('request', (request) => {
+    expect(new URL(request.url()).pathname.endsWith('/content')).toBe(false)
     const url = new URL(request.url())
     if (
       ['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol) &&
       url.origin !== 'http://127.0.0.1:3212'
     )
       external.push(request.url())
-    if (url.pathname.endsWith('/content')) content.push(request.url())
+    if (url.pathname.endsWith('/scene')) content.push(request.url())
   })
   page.on('pageerror', (error) => errors.push(error.message))
   const fixture = '.work/e2e-nas/A.fig'

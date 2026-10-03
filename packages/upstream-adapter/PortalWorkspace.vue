@@ -6,7 +6,8 @@ import EditorWorkspace from '@/components/editor/EditorWorkspace.vue'
 import FontStatusBanner from '@/components/font-status/FontStatusBanner.vue'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 import type { FileRecord } from '../../portal/contracts/index'
-import { loadBytes } from '../../portal/upstream-adapter/editor'
+import { loadScene } from '../../portal/upstream-adapter/editor'
+import { MAX_SCENE_BYTES, SCENE_TYPE } from '../../portal/transport/scene-wire'
 import { readDownload } from '../../portal/transport/download'
 const editor = createTab().store
 useKeyboard()
@@ -158,23 +159,28 @@ onMounted(async () => {
     )
     name.value = metadata.name
     await nextTick()
-    progress.value = '讀取文件'
+    progress.value = '伺服器解析文件'
     const response = await fetch(
-      '/api/files/' + encodeURIComponent(id) + '/content',
+      '/api/files/' + encodeURIComponent(id) + '/scene',
       { credentials: 'same-origin', cache: 'no-store', signal: abort.signal }
     )
+    if (response.status === 429)
+      throw new Error('伺服器正在解析其他文件，請稍後重試')
+    if (!response.ok) throw new Error('文件不可讀、解析失敗或來源離線')
     if (response.headers.get('X-Document-Revision') !== metadata.revision)
       throw new Error('文件已變更，請重新開啟')
+    if (response.headers.get('Content-Type') !== SCENE_TYPE)
+      throw new Error('場景服務不可用')
     const bytes = await readDownload(
       response,
-      metadata.size,
-      me.value?.maxFileBytes ?? 0,
+      Number(response.headers.get('Content-Length')),
+      MAX_SCENE_BYTES,
       abort.signal,
       (read, size) => {
-        progress.value = `下載 ${Math.round((read / size) * 100)}%`
+        progress.value = `載入場景 ${Math.round((read / size) * 100)}%`
       }
     )
-    await loadBytes(editor, bytes, metadata.name, abort.signal, (phase) => {
+    await loadScene(editor, bytes, metadata.name, abort.signal, (phase) => {
       progress.value = phase
     })
     ready.value = true

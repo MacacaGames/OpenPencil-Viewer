@@ -1,8 +1,11 @@
-import { parseFigFile } from '@open-pencil/core/io/formats/fig'
+import {
+  deserializeSceneGraph,
+  type SerializedSceneGraph
+} from '@open-pencil/core/scene-transfer'
 import type { EditorStore } from '@/app/editor/session'
 import { applyImportedDocument } from '@/app/document/io/imported-document'
 import { lockGraph } from './readonly'
-export async function loadBytes(
+export async function loadScene(
   editor: EditorStore,
   bytes: ArrayBuffer,
   name: string,
@@ -10,14 +13,9 @@ export async function loadBytes(
   progress: (phase: string) => void
 ) {
   const timeout = AbortSignal.any([signal, AbortSignal.timeout(60000)])
-  progress('安全檢查')
-  await validateFig(bytes, timeout)
-  progress('解析設計')
-  const graph = await parseFigFile(bytes, {
-    populate: 'all',
-    allowMainThreadFallback: false,
-    signal: timeout
-  })
+  progress('載入場景')
+  const data = await unpackScene(bytes, timeout)
+  const graph = deserializeSceneGraph(data)
   const load = editor.preparationController.begin({
     kind: 'storage-open',
     phase: 'materializing',
@@ -56,22 +54,38 @@ export async function loadBytes(
     timeout.removeEventListener('abort', stop)
   }
 }
-async function validateFig(bytes: ArrayBuffer, signal: AbortSignal) {
+async function unpackScene(
+  bytes: ArrayBuffer,
+  signal: AbortSignal
+): Promise<SerializedSceneGraph> {
   const worker = new Worker(
-    new URL('../transport/fig-safety-worker.ts', import.meta.url),
+    new URL('../transport/scene-worker.ts', import.meta.url),
     { type: 'module' }
   )
   let abort: () => void = () => undefined
   try {
-    await new Promise<void>((resolve, reject) => {
+    return await new Promise((resolve, reject) => {
       signal.throwIfAborted()
       abort = () => reject(new DOMException('Aborted', 'AbortError'))
       signal.addEventListener('abort', abort, { once: true })
-      worker.onmessage = (event: MessageEvent<{ ok: boolean }>) =>
-        event.data.ok ? resolve() : reject(new Error('文件格式或資源限制'))
-      worker.onerror = () => reject(new Error('安全檢查失敗'))
-      const copy = bytes.slice(0)
-      worker.postMessage({ bytes: copy, max: 512 * 1024 * 1024 }, [copy])
+      worker.onmessage = (
+        event: MessageEvent<{
+          scene?: { version: number; graph: SerializedSceneGraph }
+          error?: boolean
+        }>
+      ) => {
+        const scene = event.data.scene
+        if (
+          event.data.error ||
+          !scene ||
+          scene.version !== 1 ||
+          !Array.isArray(scene.graph?.nodes)
+        )
+          reject(new Error('場景格式或資源限制'))
+        else resolve(scene.graph)
+      }
+      worker.onerror = () => reject(new Error('場景載入失敗'))
+      worker.postMessage(bytes, [bytes])
     })
   } finally {
     signal.removeEventListener('abort', abort)

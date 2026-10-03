@@ -9,11 +9,12 @@ import {
 import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
-import { pipeline } from 'node:stream/promises'
+import { parseScene } from '../../apps/api/scene.ts'
+import { SCENE_TYPE } from '../../packages/transport/scene-wire.ts'
 import type { AddressInfo } from 'node:net'
 
 // Explicit opt-in: operator-approved files, fed only to a localhost Mock browser.
-// Routes substitute bytes/metadata to test the native decoder/UI, not NAS authz.
+// Routes substitute server-parsed scenes/metadata; this is not NAS authz acceptance.
 test.use({ screenshot: 'off', trace: 'off', video: 'off' })
 test('approved real FIGs load in native readonly UI without external document traffic', async ({
   browser
@@ -38,22 +39,29 @@ test('approved real FIGs load in native readonly UI without external document tr
     // Streaming avoids Playwright's base64 fulfilment limit for large fixtures.
     // A short-lived loopback endpoint with an unpredictable path is test-only.
     const fixturePath = '/' + randomUUID()
-    const server = createServer((request, response) => {
+    const server = createServer(async (request, response) => {
       if (request.method !== 'GET' || request.url !== fixturePath) {
         response.writeHead(404).end()
         return
       }
-      response.writeHead(200, {
-        'Content-Type': 'application/octet-stream',
-        'Content-Length': String(before.size),
-        'X-Document-Revision': revision,
-        'Access-Control-Allow-Origin': 'http://127.0.0.1:3212',
-        'Access-Control-Allow-Credentials': 'true',
-        'Cache-Control': 'no-store'
-      })
-      void pipeline(createReadStream(path), response).catch(() =>
-        response.destroy()
-      )
+      try {
+        const packed = await parseScene(
+          createReadStream(path),
+          before.size,
+          AbortSignal.timeout(60000)
+        )
+        response.writeHead(200, {
+          'Content-Type': SCENE_TYPE,
+          'Content-Length': String(packed.length),
+          'X-Document-Revision': revision,
+          'Access-Control-Allow-Origin': 'http://127.0.0.1:3212',
+          'Access-Control-Allow-Credentials': 'true',
+          'Cache-Control': 'no-store'
+        })
+        response.end(packed)
+      } catch {
+        response.writeHead(422).end()
+      }
     })
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject)
@@ -101,7 +109,7 @@ test('approved real FIGs load in native readonly UI without external document tr
       }
     })
     await page.route('http://127.0.0.1:3212/api/files/**', async (route) => {
-      if (route.request().url().endsWith('/content')) {
+      if (route.request().url().endsWith('/scene')) {
         await route.continue({ url: fixtureOrigin + fixturePath })
       } else {
         const response = await route.fetch(),

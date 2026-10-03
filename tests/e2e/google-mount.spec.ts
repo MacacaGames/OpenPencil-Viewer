@@ -12,7 +12,8 @@ test('signed Google shared browse: both users see all files, nested navigation a
     documentRequests: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   page.on('request', (request) => {
-    if (request.url().endsWith('/content')) documentRequests.push(request.url())
+    expect(new URL(request.url()).pathname.endsWith('/content')).toBe(false)
+    if (request.url().endsWith('/scene')) documentRequests.push(request.url())
   })
   await page.route(origin + '/auth/google/start', async (route) => {
     const start = await route.fetch({ maxRedirects: 0 })
