@@ -376,3 +376,35 @@ Local linux/amd64 candidate `openpencil-viewer:server-scene` built by overlaying
 Final local Linux container smoke: `PORTAL_TEST_IMAGE=openpencil-viewer:server-scene sh tests/container/readonly.sh` **PASS** under amd64 emulation: UID10001, RO rootfs/source, strict readiness503, configured JSON limits/redaction, confined Linux reads, shared production raw GET/HEAD410, invalid FIG422, valid synthetic FIG scene200 and cache-hit. An initial probe failed because the new valid synthetic file violated the pre-existing exact single-file scan fixture; moved its creation after that probe, kept its confinement assertions unchanged, rerun PASS. Temporary test containers/volumes cleaned by trap.
 
 Exported manual package `.work/releases/server-scene-amd64-20261003.zip` **117,992,417 bytes**, ZIP CRC PASS, six public files. Image `openpencil-viewer:server-scene`, linux/amd64/user10001:10001, ID **sha256:d838180242bafb6824197828760e3eb52869d381082d53cd7f5ef431cb3991a7**. image.tar.gz **117,986,335 bytes**, SHA256 **1ccb4cf6108263662f73657fd562faa8e13a698ce950b151446a789f208252a4**. README includes manual import/image selection/recreation and limitations; no OAuth JSON, source documents or state included. Old export preserved. Final typecheck/format/diff checks PASS. No Git commit/push, registry publication, NAS deployment or ACL/account/source modifications by agent.
+
+## CI scene-parser build prerequisite — 2026-10-03 Asia/Taipei
+
+Operator supplied the failing GitHub Actions log for the server-scene revision. The log shows `verify-upstream` PASS and the Python synthetic checks PASS; `npm test` then exits1 with **36 PASS /2 FAIL**, both authorized `/scene` requests expecting200 and receiving422 at google-mount.test.ts lines92/240. The workflow ran tests before build. The worker is created from `dist/api/scene-parser.js`, an ignored artifact that does not exist in a fresh checkout; its load error becomes `scene-parse-failed`422. The prior local38-pass result used an already-built worker and did not prove this CI order.
+
+Reproduced in `.work/ci-clean-repro` with the same synthetic fixture and filesystem helper, but no dist: exactly the two422 failures. An initial reproduction omitted the CWD-relative filesystem helper and returned source-unavailable503; added only the helper before confirming the matching422 failures. After the full build, copied only the new parser bundle into that isolated directory: **3 PASS /0 FAIL, 1.783s**, while dist/web remained absent. This isolates the worker prerequisite; no fixture, runtime error handling, authorization or readonly assertion was weakened.
+
+Changed GitHub Actions to build the native UI/API/parser before API tests and split upstream, NAS probes, types/format, build, API tests, native graph checks, Chromium, browser and source-integrity steps. Applied the same build-before-test order to GitLab and documented the local prerequisite in TESTING.md. Upstream SHA/submodule and application code are unchanged.
+
+Actual local checks with pinned Node22.23.3/Bun1.4.2:
+
+| Command | Actual result |
+|---|---|
+| `npm run build` | **PASS**, complete package/native Vite/API/parser build; Vite1m58s. Existing optional WebGPU/vendor/chunk/dynamic-import/plugin and esbuild side-effect warnings remain |
+| `npm test` after build | **38 PASS /0 FAIL /0 SKIP, 2.589s**, with loopback/Unix-socket permission |
+| `npm run typecheck`, `npm run typecheck:editor` | **PASS** |
+| `npm run test:adapter` | **3 PASS /0 FAIL /54 assertions, 352ms** |
+| `npm run verify-upstream` | **PASS**, pristine fixed SHA8c72b62da07ea1f7e82de84c7c837c3c78dfbf95 |
+| `npm run format:check` | **PASS** |
+| `.tools/actionlint-v1.7.12/actionlint -shellcheck= .github/workflows/ghcr.yml`, `git diff --check` | **PASS** |
+| `python3 scripts/probe-nas.py --self-test` | **13 PASS** |
+| `PYTHONPYCACHEPREFIX="$PWD/.work/pycache" python3 tests/nas/test_bridge.py` | **7 PASS /1 SKIP**, Linux peer-credential case unavailable on macOS |
+| Same Python cache prefix, `python3 tests/nas/test_dsm_query_format.py` | **6 PASS** |
+| `npm run test:e2e -- --config .work/config-fix-playwright.config.ts` | **2 PASS /1 SKIP, 15.6s**, installed Chrome, synthetic Google/shared native load and Mock A/B immutable graph/no external traffic/persistence. Real fixtures not enabled for this CI-only change |
+
+Clean Linux validation: `docker build --file deploy/Dockerfile --target build --tag openpencil-viewer:ci-order-check .` **PASS**, complete package/native/API/parser build from the explicit source allowlist/frozen installs/exact upstream; Linux Vite9.99s. No host node_modules, .work, dist, state, Google secrets, real FIGs or NAS mounts were supplied. This compiler-stage image is only a local CI check and was not published/deployed.
+
+In that image, `npm run verify-upstream` and Python probe/broker/query tests **PASS**, respectively13/8/6, including Linux Unix-socket peer-credential/bound-read coverage. The first container invocation omitted deploy/config.example.json (the compiler stage does not copy deployment examples), so four runtime-config tests returnedENOENT and the root-only invocation skipped the unreadable-permissions test. Both `/scene` tests passed in that initial run. Added the explicit read-only public example bind and reran under UID/GID10001:10001 with network disabled: **38 PASS /0 FAIL /0 SKIP, 1.683s**; both Portal and editor typechecks PASS. Actual execution: `docker run --rm --network none --user 10001:10001 --env HOME=/tmp`, read-only binds for tests, tsconfig.json, playwright.config.ts and deploy/config.example.json, image openpencil-viewer:ci-order-check, `sh -c 'npm test && npm run typecheck && npm run typecheck:editor'`. Separate compiler-stage `npm run test:adapter` with only the synthetic tests bind: **3 PASS /0 FAIL /54 assertions, 294ms**. Test assertions and production mount/security settings remain unchanged.
+
+Logs: `.work/ci-order-{build,tests,isolated-tests,adapter,e2e,linux-build,linux-tests,linux-tests-unprivileged,linux-adapter}.log`. Final upstream tracked diff/status and `git diff --check` PASS. Fix prepared as a local commit for the operator's manual push.
+
+Pending: corrected GitHub runner/amd64+arm64 image jobs/GHCR must be rerun after the operator pushes this fix; local results do not claim remote CI success. Formal native DSM provider/live ACL acceptance remains blocked; no NAS deployment/account/ACL/source changes, registry publication or Git push by the agent.

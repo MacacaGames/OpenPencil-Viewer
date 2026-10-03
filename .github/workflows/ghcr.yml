@@ -29,20 +29,33 @@ jobs:
         run: |
           npm install --global bun@1.4.2
           bun install --frozen-lockfile
-      - name: Verify readonly integration
+      - name: Verify pinned upstream
+        run: npm run verify-upstream
+      - name: Test synthetic NAS probes
         run: |
-          npm run verify-upstream
           python3 scripts/probe-nas.py --self-test
           python3 tests/nas/test_bridge.py
           python3 tests/nas/test_dsm_query_format.py
-          npm test
+      - name: Check Portal types and formatting
+        run: |
           npm run typecheck
           npm run format:check
-          npm run build
+      # /scene integration tests use the bundled native parser worker.
+      # A fresh checkout has no dist/api/scene-parser.js until this build.
+      - name: Build native UI and server scene parser
+        run: npm run build
+      - name: Test Portal API and readonly boundaries
+        run: npm test
+      - name: Check native editor types and graph immutability
+        run: |
           npm run typecheck:editor
           npm run test:adapter
-          bunx --no-install playwright install --with-deps chromium
-          npm run test:e2e
+      - name: Install Chromium
+        run: bunx --no-install playwright install --with-deps chromium
+      - name: Test native readonly browser flow
+        run: npm run test:e2e
+      - name: Verify source integrity
+        run: |
           git -C upstream/open-pencil diff --exit-code
           git diff --check
       - uses: actions/upload-artifact@v4

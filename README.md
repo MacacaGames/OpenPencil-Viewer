@@ -6,7 +6,7 @@
 
 需要 Git、Node **22.23.3**、Bun **1.4.2**、Python 3.9+。不要在正式 NAS 上執行 Mock 或測試 fixture 腳本。
 
-Docker 操作員先看 [QUICK_START](QUICK_START.md)：已依公司 [ApeRelay](https://github.com/macacagames/aperelay) 加入根目錄 Compose、`.env`、GitHub Actions／GHCR 兩平台發布流程。已有 tar 映像可用；GitHub runner／GHCR 尚未執行。詳見 [部署慣例對照](docs/DEPLOYMENT_CONVENTIONS.md)。
+Docker 操作員先看 [QUICK_START](QUICK_START.md)：已依公司 [ApeRelay](https://github.com/macacagames/aperelay) 加入根目錄 Compose、`.env`、GitHub Actions／GHCR 兩平台發布流程。已有 tar 映像可用；GitHub runner 曾因解析器尚未建置而在 API 測試失敗，已修正 build-before-test 順序並通過本機／乾淨 Linux 檢查，遠端重跑及 GHCR 發布結果待確認。詳見 [部署慣例對照](docs/DEPLOYMENT_CONVENTIONS.md)。
 
 ```sh
 git submodule update --init --recursive

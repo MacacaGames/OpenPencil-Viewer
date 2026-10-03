@@ -4,14 +4,14 @@
 
 ## 可重現的本機檢查
 
-使用 Node 22.23.3、Bun 1.4.2、Python 3.9+。先依 README bootstrap/build，安裝 Chromium。
+使用 Node 22.23.3、Bun 1.4.2、Python 3.9+。先依 README bootstrap。`/scene` 整合測試會使用建置出的 `dist/api/scene-parser.js`；乾淨 checkout 必須先執行完整 build，再跑 `npm test`，不能依賴本機殘留的 dist。以下順序也用於 GitHub／GitLab CI。
 
 ```sh
 npm run verify-upstream
 python3 scripts/probe-nas.py --self-test
-npm test
 npm run typecheck
 npm run build
+npm test
 npm run typecheck:editor
 npm run test:adapter
 bunx --no-install playwright install chromium
@@ -40,7 +40,7 @@ Opt-in 真實 fixtures：`REAL_FIG_FIXTURE_ROOT=/absolute/approved/test_files np
 
 GitLab `verify_mock` 固定 runtime，frozen install、upstream clean、probe self-test、API/types/build/native graph/browser。`image_synthetic` 只在 protected branch 手動由 Docker build runner 執行，沒有掛 NAS。`nas_live_gate` protected/manual 明確 blocked，不會 SSH／變更帳號／ACL／部署。CI 定義尚未在 GitLab 真實 runner 跑過。
 
-GitHub `.github/workflows/ghcr.yml` 採公司 ApeRelay 入口：main/master/v*、PR/manual；驗證後各平台 image synthetic RO 測試，再推 GHCR／合成多平台 manifest。PR 不 push、沒有自動部署或 NAS mounts，沒有 package visibility 更動。actionlint 靜態檢查通過，**GitHub runner／GHCR 尚未執行**。
+GitHub `.github/workflows/ghcr.yml` 採公司 ApeRelay 入口：main/master/v*、PR/manual；驗證後各平台 image synthetic RO 測試，再推 GHCR／合成多平台 manifest。PR 不 push、沒有自動部署或 NAS mounts，沒有 package visibility 更動。操作員提供的 runner 紀錄中 upstream／NAS synthetic 檢查通過，但建置前的兩個 `/scene` 測試失敗；已修正建置順序並分開步驟，修正版 GitHub runner／GHCR 結果仍待重新執行。
 
 現場先獲得授權的測試 NAS root 與 A/B 普通帳號。依 NAS_PROBE 記 DSM/kernel/directory/email 管理政策、Windows ACL/群組deny/advanced share、same-user File Station/SMB baseline；逐項記 I01–I12、A01–A15、R01–R10 的 timestamp、Portal/API/UI 及 redacted native 證據。不能以 admin File Station session 或 service UID filesystem readability 作對照。
 

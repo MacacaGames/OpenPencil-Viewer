@@ -15,10 +15,11 @@ verify_mock:
     - python3 scripts/probe-nas.py --self-test
     - python3 tests/nas/test_bridge.py
     - python3 tests/nas/test_dsm_query_format.py
-    - npm test
     - npm run typecheck
     - npm run format:check
+    # /scene tests need the bundled parser worker from this build.
     - npm run build
+    - npm test
     - npm run typecheck:editor
     - npm run test:adapter
     - bunx --no-install playwright install --with-deps chromium
