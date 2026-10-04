@@ -1,4 +1,7 @@
-# CI builds the web assets; the NAS does not compile OpenPencil.
+# syntax=docker/dockerfile:1
+# Every published tag includes raster + Selkies. Mode is a runtime config choice.
+ARG DESKTOP_IMAGE=lscr.io/linuxserver/chromium@sha256:2d32e1b2b28aa92973aa0f58c433c0b045db6e1224d7001eeaa9cde1a474ce13
+FROM --platform=$TARGETPLATFORM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS node-runtime
 FROM --platform=$BUILDPLATFORM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS compiler-base
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 && rm -rf /var/lib/apt/lists/*
 FROM compiler-base AS build
@@ -22,23 +25,36 @@ RUN npm install --global bun@1.4.2
 WORKDIR /deps
 COPY package.json bun.lock ./
 RUN bun install --production --frozen-lockfile
-# Locked production dependencies are JavaScript. Refuse common native addons;
-# the target Node/Python binaries come from the target-platform base instead.
+# Target Node/Python/desktop binaries come from their pinned platform manifests.
 RUN test -z "$(find node_modules -type f -name '*.node' -print -quit)"
-FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 && rm -rf /var/lib/apt/lists/*
-RUN groupadd --gid 10001 portal && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin portal
+FROM --platform=$TARGETPLATFORM ${DESKTOP_IMAGE} AS runtime
+# Use desktop components, never the base image's root /init or Docker daemon.
+RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources \
+ && printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260930T000000Z/ trixie main\n' > /etc/apt/sources.list.d/portal.list \
+ && apt-get update && apt-get install -y --no-install-recommends ffmpeg vainfo mesa-utils \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --gid 10001 portal && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin portal \
+ && rm -f /etc/sudoers.d/* && chmod 000 /usr/bin/sudo \
+ && mkdir -p /app/tools/remote/empty /etc/chromium/policies/managed \
+ && dpkg-query -W > /app/runtime-packages.txt \
+ && /lsiopy/bin/python -c 'import importlib.metadata as m; assert m.version("selkies")=="2.0.0"; assert m.version("pixelflux")=="2.1.0"'
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 WORKDIR /app
 COPY --from=dependencies /deps/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/tools/filesystem ./tools/filesystem
 COPY --from=build /app/scripts/probe-nas.py ./tools/probe-nas.py
 COPY --from=build /app/tools/nas ./tools/nas
-LABEL org.opencontainers.image.title="OpenPencil Synology LAN Portal" \
+COPY --from=build /app/tools/remote ./tools/remote
+COPY deploy/selkies/chromium-policy.json /etc/chromium/policies/managed/portal.json
+COPY deploy/selkies/versions.json /app/versions.json
+LABEL org.opencontainers.image.title="OpenPencil read-only Portal" \
       org.opencontainers.image.version="0.1.0" \
+      portal.features="raster,selkies" \
       portal.upstream.sha="8c72b62da07ea1f7e82de84c7c837c3c78dfbf95"
-ENV NODE_ENV=production PORTAL_CONFIG=/config/config.json PYTHON_BIN=python3
+ENV NODE_ENV=production PORTAL_CONFIG=/config/config.json PYTHON_BIN=python3 \
+    HOME=/state/remote START_DOCKER=false PIXELFLUX_WAYLAND=false
 USER 10001:10001
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["node","-e","fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-CMD ["node","dist/api/server.js"]
+ENTRYPOINT ["node","/app/dist/api/server.js"]

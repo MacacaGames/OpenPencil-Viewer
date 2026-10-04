@@ -1,6 +1,9 @@
 {
-  "base": "lscr.io/linuxserver/chromium@sha256:35e67a28573b13269bb96f9e8464411b4b71467ce46a055a4d584ab5d2c0f06f",
-  "platform": "linux/amd64",
+  "base": "lscr.io/linuxserver/chromium@sha256:2d32e1b2b28aa92973aa0f58c433c0b045db6e1224d7001eeaa9cde1a474ce13",
+  "platforms": {
+    "linux/amd64": "sha256:35e67a28573b13269bb96f9e8464411b4b71467ce46a055a4d584ab5d2c0f06f",
+    "linux/arm64": "sha256:30282ed89be588e4ff891a32c88f88876e697126494d0d745693a064c7210807"
+  },
   "linuxserverBuild": "d759a0f5-ls56",
   "selkies": "2.0.0",
   "pixelflux": "2.1.0",

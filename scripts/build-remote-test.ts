@@ -23,9 +23,10 @@ const result = spawnSync(
     'build',
     '--build-arg',
     'PORTAL_IMAGE=' +
-      (process.env.PORTAL_TEST_IMAGE ?? 'openpencil-viewer:selkies-0.1.0'),
+      (process.env.PORTAL_TEST_IMAGE ?? 'openpencil-viewer:0.1.0'),
     '-t',
-    'openpencil-viewer:selkies-synthetic-test',
+    process.env.PORTAL_SYNTHETIC_IMAGE ??
+      'openpencil-viewer:selkies-synthetic-test',
     directory
   ],
   { stdio: 'inherit' }

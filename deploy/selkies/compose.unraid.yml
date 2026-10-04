@@ -1,9 +1,9 @@
 name: openpencil-selkies
 services:
   portal:
-    image: openpencil-viewer:selkies-0.1.0
+    image: ${PORTAL_IMAGE:-ghcr.io/macacagames/openpencil-viewer:latest}
     platform: linux/amd64
-    user: '10001:10001'
+    user: '${PORTAL_UID:-99}:${PORTAL_GID:-100}'
     init: true
     restart: unless-stopped
     read_only: true

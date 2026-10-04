@@ -13,7 +13,7 @@ import { resolve, relative } from 'node:path'
 import { root, output } from './common.ts'
 import { verifyUpstream } from './verify-upstream.ts'
 verifyUpstream()
-const image = process.argv[2] ?? 'openpencil-viewer:selkies-0.1.0'
+const image = process.argv[2] ?? 'openpencil-viewer:0.1.0'
 const info = JSON.parse(
   output('docker', ['image', 'inspect', '--format', '{{json .}}', image])
 )
@@ -25,7 +25,10 @@ if (
   info.Architecture !== 'amd64' ||
   info.Config.User !== '10001:10001' ||
   info.Config.Labels?.['portal.upstream.sha'] !== lock.sha ||
-  info.Config.Labels?.['org.opencontainers.image.version'] !== '0.1.0-selkies'
+  !(
+    info.Config.Labels?.['portal.features']?.split(',').includes('selkies') ||
+    info.Config.Labels?.['org.opencontainers.image.version'] === '0.1.0-selkies'
+  )
 )
   throw new Error('Unexpected Selkies image platform/user/version/upstream')
 const destination = resolve(
@@ -51,7 +54,8 @@ for (const name of [
 ])
   cpSync(
     resolve(root, 'deploy/selkies', name),
-    resolve(destination, 'deploy/selkies', name)
+    resolve(destination, 'deploy/selkies', name),
+    { dereference: true }
   )
 for (const name of ['UNRAID_SELKIES.zh-TW.md', 'IMPLEMENTATION_STATUS.md'])
   cpSync(resolve(root, 'docs', name), resolve(destination, 'docs', name))

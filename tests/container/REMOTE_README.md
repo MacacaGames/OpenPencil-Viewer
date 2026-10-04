@@ -4,6 +4,15 @@
 
 先建置正式固定映像，再在 repository 根目錄：
 
+CI 自動使用一般 `deploy/Dockerfile` 的 release candidate，不需要功能專用 tag；amd64 和 arm64 均在對應原生 Linux runner 上測試。完整 gate 可手動重現：
+
+```sh
+PORTAL_TEST_IMAGE=你的已建置映像 sh tests/container/readonly.sh
+PORTAL_TEST_IMAGE=你的已建置映像 npm run test:image:features
+```
+
+第二個指令檢查 production 元件、UID10001／99 的 SQLite0600／WAL，再建立僅含合成 fixture 的衍生測試映像，分別驗證兩種執行身份的實際 H.264／resize／隔離／登出清理。衍生測試映像與容器會清除，日誌留在 `.work/selkies-ci/`。Docker host 架構必須與候選映像相同；CI 不以 QEMU 結果替代 Chromium sandbox 驗收。以下是單次手動 harness 操作：
+
 ```sh
 node --import tsx scripts/build-remote-test.ts
 docker run -d --name openpencil-selkies-synthetic-test \

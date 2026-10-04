@@ -1,14 +1,16 @@
 # Unraid Selkies 唯讀 OpenPencil
 
-本方案新增獨立的 `viewerMode: "selkies"` 部署；現有 raster viewer 仍可獨立部署。身份採已接受的 Google Workspace `google-mount`：合格組織帳號共用設定的唯讀目錄。這不代表 DSM 個人 ACL 已完成；`dsm-strict` 的 fail closed 行為保留。
+一般 CI／GHCR 映像同時包含 raster viewer、Selkies 與 Chromium，使用既有 `latest`、`sha-*`、branch／version 標籤即可；由設定 `viewerMode: "selkies"` 選擇遠端唯讀模式，無需 Selkies 專用映像標籤。現有 raster viewer 仍可用獨立設定／部署，也可保留舊映像 digest 回復。身份採已接受的 Google Workspace `google-mount`：合格組織帳號共用設定的唯讀目錄。這不代表 DSM 個人 ACL 已完成；`dsm-strict` 的 fail closed 行為保留。
 
 ## 交付與固定版本
 
-建置來源為 [Dockerfile](../deploy/selkies/Dockerfile)，版本鎖為 [versions.json](../deploy/selkies/versions.json)。正式目標為 `linux/amd64`。
+一般 CI 與手動建置共用 [deploy/Dockerfile](../deploy/Dockerfile)，舊 `deploy/selkies/Dockerfile` 路徑只是同一檔案的連結。版本鎖為 [versions.json](../deploy/selkies/versions.json)。支援 `linux/amd64`／`linux/arm64`；本案 Unraid 使用 amd64。
 
 | 元件 | 固定值 |
 |---|---|
-| LinuxServer Chromium 元件映像 | `lscr.io/linuxserver/chromium@sha256:35e67a28573b13269bb96f9e8464411b4b71467ce46a055a4d584ab5d2c0f06f` |
+| LinuxServer Chromium 元件 index | `lscr.io/linuxserver/chromium@sha256:2d32e1b2b28aa92973aa0f58c433c0b045db6e1224d7001eeaa9cde1a474ce13` |
+| amd64 元件 manifest | `sha256:35e67a28573b13269bb96f9e8464411b4b71467ce46a055a4d584ab5d2c0f06f` |
+| arm64 元件 manifest | `sha256:30282ed89be588e4ff891a32c88f88876e697126494d0d745693a064c7210807` |
 | LinuxServer build | `d759a0f5-ls56` |
 | Chromium | `154.0.8037.57-1~deb13u1` |
 | Mesa | `25.0.7-2+deb13u1` |
@@ -20,11 +22,11 @@
 在 repository 根目錄建置：
 
 ```sh
-docker build --platform linux/amd64 -f deploy/selkies/Dockerfile \
-  -t openpencil-viewer:selkies-0.1.0 .
-docker image inspect openpencil-viewer:selkies-0.1.0 \
+docker build --platform linux/amd64 -f deploy/Dockerfile \
+  -t openpencil-viewer:0.1.0 .
+docker image inspect openpencil-viewer:0.1.0 \
   --format '{{.Id}} {{.Architecture}} {{json .Config.User}}'
-docker save -o openpencil-selkies-amd64.tar openpencil-viewer:selkies-0.1.0
+docker save -o openpencil-selkies-amd64.tar openpencil-viewer:0.1.0
 sha256sum openpencil-selkies-amd64.tar
 ```
 
@@ -33,6 +35,8 @@ Dockerfile 使用 LSIO 映像作為元件來源，覆寫 entrypoint，以 `10001
 `npm run release:export:selkies` 可匯出映像及公開部署檔到 `.work/releases/selkies-amd64-<image id>/`，附 manifest、SHA256SUMS、版本鎖與實際驗證狀態，不包含FIG、OAuth或state。匯出的Dockerfile是來源參考，重建仍需repository完整來源；解壓後可直接按本手冊手動部署。
 
 收到匯出目錄時，在其根目錄先執行 `sha256sum -c SHA256SUMS` 與 `docker load -i image.tar`，再進入 `deploy/selkies/` 填寫 `.env`／config並執行Compose；後文的 `openpencil-selkies-amd64.tar` 是自行建置匯出的示例檔名。
+
+此次 CI 修改發布成功後，Unraid GUI 的 Repository 直接填 `ghcr.io/macacagames/openpencil-viewer:latest`，或一般 `sha-<新commit>`／已驗證 digest。舊 `sha-4d2baff` 的建置未包含 Selkies runtime，需使用此次修改之後發布的新映像。CI 在兩種架構的原生 Linux runner 上先驗證 raster／唯讀來源、實際 CPU H.264、resize、會話隔離與登出清理，再發布同一已測映像；UID10001 和 Unraid UID99 均納入。這些合成測試不代替 Unraid GPU／正式 NAS 驗收。離線 tar 匯入仍可選用，並在 `.env` 的 `PORTAL_IMAGE` 填入匯入後的本機 tag。
 
 ## 資料與連線邊界
 
@@ -55,15 +59,15 @@ flowchart LR
 尚未取得實際 Unraid 版本、GPU PCI ID、share／本機儲存路徑；範例故意留白。使用操作員已核准的指定 share／子目錄，不掛載整個 NAS volume。NAS 掛載由操作員在 Unraid 管理，不由應用程式建立或改動。對 NAS 的 mount 與容器 bind 都應唯讀。
 
 1. 把 `deploy/selkies/` 放到獨立的部署目錄；保留原 raster 部署。複製 `env.example` 為 `.env`，`config.example.json` 為專用 config 目錄中的 `config.json`。改 `origin`、`allowedHostedDomains`，沿用既有 OAuth JSON；callback 為 `https://你的網域/auth/google/callback`。
-2. `.env` 填入 `PORTAL_CONFIG_DIR`、`GOOGLE_OAUTH_FILE`、`NAS_DESIGNS_PATH`、`LOCAL_STATE_PATH`。state/profile 必須使用 Unraid 本機獨立儲存；既有目錄需讓數值 UID/GID `10001:10001` 可寫，config／OAuth／NAS 資料只需可讀。不要用 `chmod 777` 解決權限。
+2. `.env` 填入 `PORTAL_CONFIG_DIR`、`GOOGLE_OAUTH_FILE`、`NAS_DESIGNS_PATH`、`LOCAL_STATE_PATH`。Unraid Compose 預設 `PORTAL_UID=99`／`PORTAL_GID=100`，可依需求設為10001:10001；state/profile 必須使用 Unraid 本機獨立儲存，既有資料需屬於選定 UID，config／OAuth／NAS 資料只需可讀。不要用 `chmod 777` 解決權限。
 3. `NAS_EXPECTED_SOURCE` 填入容器 `/proc/self/mountinfo` 顯示的實際來源，例如 `//NAS/approved-share` 或 `NAS:/approved-export`；不是 Unraid 本機 mountpoint。啟動要求 `/data/designs` 是 `ro` 的 `cifs`、`nfs` 或 `nfs4` 且來源完全相符；每次建立／續期／存取串流及 watchdog 都會重新檢查。來源 inode、revision、可讀性另由既有安全 index 驗證。
 4. 匯入映像並先用 CPU／軟體渲染跑通登入與會話：`.env` 設 `GPU_ENCODER_MODE=cpu`、`GPU_RENDER_MODE=software`，使用主 Compose。主 Compose 不需要 DRM device。若使用 `auto` 且未提供 GPU，日誌明確顯示 CPU／software。
 5. 反向代理參考 `nginx.example.conf`；TLS、Origin、WebSocket Upgrade、長連線 timeout 均需成立。範例只 listen 主機 `127.0.0.1:24681`，代理需在同主機可達此位址。若代理另在容器，操作員須設計專用網路／對應 listener，不能將內部端點一起公開。
 6. 開始 GPU 診斷，填入精確 PCI 地址、DRM group 數值 GID，再加入 GPU overlay。正式手動部署命令如下：
 
 ```sh
-docker load -i openpencil-selkies-amd64.tar
 docker compose --env-file .env -f compose.unraid.yml config
+docker compose --env-file .env -f compose.unraid.yml pull
 docker compose --env-file .env -f compose.unraid.yml up -d
 docker compose -f compose.unraid.yml logs --tail 100 portal
 # GPU 模式：設定 GID／PCI 與模式後重建；不要同時跑兩個部署爭用代理埠。
@@ -71,7 +75,9 @@ docker compose --env-file .env -f compose.unraid.yml -f compose.gpu.yml config
 docker compose --env-file .env -f compose.unraid.yml -f compose.gpu.yml up -d --force-recreate
 ```
 
-Compose 使用 root filesystem readonly、cap_drop ALL、no-new-privileges、數值 non-root、私有 IPC、512MiB `/tmp`、1GiB `/dev/shm`、12GiB RAM、512 pids。Portal／Chromium 不取得 Docker socket。需要更多大文件記憶體時由操作員按量測調整 mem_limit，不因此變更 NAS mount。
+Compose 使用 root filesystem readonly、cap_drop ALL、no-new-privileges、數值 non-root（Unraid 預設99:100）、私有 IPC、512MiB `/tmp`、1GiB `/dev/shm`、12GiB RAM、512 pids。Portal／Chromium 不取得 Docker socket。需要更多大文件記憶體時由操作員按量測調整 mem_limit，不因此變更 NAS mount。
+
+操作員也可選用 Unraid 常用的 `nobody:users` 數值身份 `99:100`：Docker CLI 將 `--user 10001:10001` 改為 `--user 99:100`，Compose 將 `user` 改為 `'99:100'`，並重建容器。此映像直接啟動 Node，沒有處理 `PUID`／`PGID` 的 root init；僅設定這兩個環境變數不會切換身份。專用本機 state 及其既有資料需屬於選定 UID，config／OAuth／NAS 來源需讓該身份可讀，DRM supplementary groups 仍須保留。`99:100` 的本機合成 SQLite 建立、`chmod 0600`、WAL 讀寫已驗證；完整 Unraid Chromium／GPU 會話仍待實機驗證。
 
 ## Chromium sandbox 與主機相容性
 
@@ -84,7 +90,7 @@ Chromium 保留 sandbox，沒有 `--no-sandbox`、`--disable-seccomp-filter-sand
 ```sh
 docker run --rm --user 10001:10001 --cap-drop ALL \
   --security-opt no-new-privileges:true --security-opt seccomp=./seccomp-chromium.json \
-  --entrypoint /usr/bin/unshare openpencil-viewer:selkies-0.1.0 -Ur -n id
+  --entrypoint /usr/bin/unshare ghcr.io/macacagames/openpencil-viewer:latest -Ur -n id
 ```
 
 輸出的 namespace 內 UID 0 只表示成功建立隔離 namespace；容器主程序仍為 10001。舊 Docker/libseccomp 如無法解析 profile，應先與操作員核對相容版本並用匹配的官方 default profile 重產同樣四項例外，不能直接改 `seccomp=unconfined`。
@@ -169,8 +175,9 @@ Selkies proxy只轉送必要頁面/zoom/pan操作與ACK；阻擋命令、剪貼�
 | 現象 | 檢查 |
 |---|---|
 | `remote-nas-mount-proof-required/unavailable` | source字串、ro、CIFS/NFS、精確target；空本機目录不符合 |
-| config/OAuth EACCES | 數值10001讀取與父目錄traverse，不改NAS員工ACL |
+| config/OAuth EACCES | 選定數值UID（Unraid預設99）讀取與父目錄traverse，不改NAS員工ACL |
 | state/profile EACCES | Unraid本機state owner／mount可寫；config保持RO |
+| SQLite `chmod EPERM` | 核對已建立容器的 `.Config.User`、`/state` host source／RW、檔案數值 owner 與 filesystem。GUI `--user 99:100` 不會自動改既有檔案 owner；本機專用 state 的 SQLite／WAL／SHM 須屬於99。若 owner 已99仍失敗，查 filesystem／掛載限制；不略過0600限制或改NAS ACL |
 | sandbox/zygote/seccomp錯誤 | 主機usernamespace/libseccomp相容性；不得關閉sandbox；ARM模擬amd64結果不能代表實體Unraid |
 | `remote-display-failed`／software fallback | 所選PCI/node、GID、R7驅動及X11GL；查看actualrenderer |
 | `remote-forced-vaapi-*` | entrypoint／實際encode／stream_info，先用明確CPU測其他流程 |

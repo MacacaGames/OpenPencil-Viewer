@@ -5,7 +5,8 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
   page
 }) => {
   const requests: string[] = [],
-    packets: number[] = []
+    packets: number[] = [],
+    reportedStreams = new Set<string>()
   let account = 'A'
   page.on('request', (request) => requests.push(request.url()))
   await page.addInitScript(() => {
@@ -39,6 +40,14 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
   page.on('websocket', (socket) =>
     socket.on('framereceived', ({ payload }) => {
       if (Buffer.isBuffer(payload)) packets.push(payload.length)
+      else {
+        try {
+          const message = JSON.parse(payload)
+          if (message.type === 'stream_info') reportedStreams.add(socket.url())
+        } catch {
+          // Ordinary Selkies control messages are not JSON.
+        }
+      }
     })
   )
   await page.route(origin + '/auth/google/start', async (route) => {
@@ -157,6 +166,7 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
       streamBytes: packets.reduce((sum, n) => sum + n, 0)
     })
   )
+  await expect.poll(() => reportedStreams.size).toBe(1)
   await page.getByRole('button', { name: '登出', exact: true }).click()
   await expect(page.locator('iframe')).toHaveCount(0)
   await expect
@@ -194,6 +204,7 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
   ).json()
   expect(second.lease).not.toBe(firstLease)
   expect(second.profiles).toEqual([second.lease])
+  await expect.poll(() => reportedStreams.size).toBe(2)
   console.log(
     JSON.stringify({
       host: 'local Docker synthetic',

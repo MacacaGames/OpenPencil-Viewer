@@ -6,7 +6,9 @@
 
 目前已有測過的 arm64／amd64 `image.tar`，依 [OPERATOR_HANDOFF](docs/OPERATOR_HANDOFF.md) 檢查 SHA256SUMS 並 `docker image load --input image.tar`，將 manifest.json 的 imageId 設為 `PORTAL_IMAGE`。
 
-GitHub repository 已指定為 [MacacaGames/OpenPencil-Viewer](https://github.com/MacacaGames/OpenPencil-Viewer)，本機 `origin` 使用 `git@github.com:MacacaGames/OpenPencil-Viewer.git`。GitHub Actions 已準備好：main／master／版本 tag 會在整合與兩平台 synthetic RO 測試通過後發布 `ghcr.io/macacagames/openpencil-viewer`；PR 只建置與測試。**這個專案尚未推送 GitHub、執行 Actions 或發布 GHCR**。正式啟用還需 live NAS gate，CI 不代替 ACL。
+GitHub repository 為 [MacacaGames/OpenPencil-Viewer](https://github.com/MacacaGames/OpenPencil-Viewer)，本機 `origin` 使用 `git@github.com:MacacaGames/OpenPencil-Viewer.git`。GitHub Actions 在 main／master／版本 tag 發布 `ghcr.io/macacagames/openpencil-viewer`；PR 只建置與測試。此次更新將一般 `latest`／`sha-*`／branch／version 映像統一為完整版本，包含 raster、Selkies、Chromium、GPU 診斷與 NAS helpers，無需指定功能 tag。兩平台在各自原生 Linux runner 通過 synthetic RO 和實際 H.264／resize／隔離／清理測試後才發布。**此次更新尚待 GitHub runner／GHCR 實跑；舊 `sha-4d2baff` 未包含 Selkies。** CI 不代替 live NAS ACL 驗收。
+
+Unraid 使用同一映像，在 config 設 `"viewerMode": "selkies"`，並配置相應的 sandbox／GPU／NAS 掛載；詳見 [Unraid 手冊](docs/UNRAID_SELKIES.zh-TW.md)。現有 raster config 仍可使用，已發布的舊 digest 可保留作回復方案。
 
 未來 registry 部署使用 Actions 發布的 manifest digest；它自動選擇 arm64／amd64：
 

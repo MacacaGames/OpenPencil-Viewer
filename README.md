@@ -6,9 +6,9 @@
 
 需要 Git、Node **22.23.3**、Bun **1.4.2**、Python 3.9+。不要在正式 NAS 上執行 Mock 或測試 fixture 腳本。
 
-Docker 操作員先看 [QUICK_START](QUICK_START.md)：已依公司 [ApeRelay](https://github.com/macacagames/aperelay) 加入根目錄 Compose、`.env`、GitHub Actions／GHCR 兩平台發布流程。已有 tar 映像可用；GitHub runner 曾因解析器尚未建置而在 API 測試失敗，已修正 build-before-test 順序並通過本機／乾淨 Linux 檢查，遠端重跑及 GHCR 發布結果待確認。詳見 [部署慣例對照](docs/DEPLOYMENT_CONVENTIONS.md)。
+Docker 操作員先看 [QUICK_START](QUICK_START.md)：已依公司 [ApeRelay](https://github.com/macacagames/aperelay) 加入根目錄 Compose、`.env`、GitHub Actions／GHCR 兩平台發布流程。已有 tar 映像及舊 GHCR 版本；此次完整功能映像的 workflow 修改仍待 GitHub 實跑與發布。詳見 [部署慣例對照](docs/DEPLOYMENT_CONVENTIONS.md)。
 
-Unraid 遠端唯讀方案請看 [Selkies 部署與換卡手冊](docs/UNRAID_SELKIES.zh-TW.md)：固定 Selkies／Chromium，原生 UI 留在伺服器，瀏覽器只接收已授權 H.264 串流。提供獨立 Compose、PCI 裝置選擇、VA-API／CPU 診斷與映像匯出；本機合成 CPU 串流已驗證，Unraid／R7 250／NAS 掛載及真實效能仍需操作員手動驗收。原 raster 部署保留，`dsm-strict` 未因此取得原生 ACL 驗收。
+Unraid 遠端唯讀方案請看 [Selkies 部署與換卡手冊](docs/UNRAID_SELKIES.zh-TW.md)：一般 CI 映像包含固定 Selkies／Chromium，原生 UI 留在伺服器，瀏覽器只接收已授權 H.264 串流。使用一般 `latest`／`sha-*`／版本標籤，由 `viewerMode` 選 raster 或 Selkies，無需另選功能標籤。兩平台 image job 在原生 runner 上驗證 raster 和實際 CPU 串流、UID10001／99、resize／隔離／清理，再 push 已測映像；此次 workflow 修改仍待 GitHub 實跑。提供獨立 Compose、PCI 裝置選擇、VA-API／CPU 診斷與可選離線匯出；Unraid／R7 250／NAS 掛載及真實效能仍需操作員手動驗收。原 raster 部署保留，`dsm-strict` 未因此取得原生 ACL 驗收。
 
 ```sh
 git submodule update --init --recursive
