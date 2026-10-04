@@ -40,6 +40,12 @@ test('Remote browser receives no graph; private native session edits remain in m
   await page.getByRole('button', { name: /^A.fig/ }).dblclick()
   const iframe = page.frameLocator('iframe[title="OpenPencil 遠端畫面"]')
   await expect(iframe.locator('#synthetic-stream')).toBeVisible()
+  // The delayed core initially paints1024px; Portal must resend size after open.
+  await expect
+    .poll(() =>
+      iframe.locator('canvas').evaluate((c) => (c as HTMLCanvasElement).width)
+    )
+    .toBe(1440)
   await expect(
     page.getByRole('combobox', { name: '遠端文字大小' })
   ).toHaveValue('1.25')

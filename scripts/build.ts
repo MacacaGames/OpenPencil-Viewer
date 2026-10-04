@@ -37,6 +37,14 @@ await build({
   outfile: outputRoot + '/api/remote-memory.js'
 })
 await build({
+  entryPoints: [root + '/packages/upstream-adapter/remote-client.ts'],
+  bundle: true,
+  platform: 'browser',
+  target: 'chrome111',
+  format: 'iife',
+  outfile: outputRoot + '/api/remote-client.js'
+})
+await build({
   entryPoints: [root + '/packages/upstream-adapter/server-parser.ts'],
   bundle: true,
   platform: 'node',

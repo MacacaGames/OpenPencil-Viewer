@@ -20,9 +20,18 @@ writeFileSync(
   `
   const canvas = document.createElement('canvas'); canvas.id='synthetic-stream';
   document.getElementById('app').append(canvas);
-  const socket = new WebSocket(location.origin.replace('http','ws')+location.pathname+'api/websockets');
-  function resize() { canvas.width=innerWidth; canvas.height=innerHeight; const c=canvas.getContext('2d'); c.fillStyle='#38566b';c.fillRect(0,0,canvas.width,canvas.height);if(socket.readyState===1)socket.send('r,'+innerWidth+'x'+innerHeight+',primary'); }
-  socket.onopen=resize; addEventListener('resize',resize);resize();
+  let socket;
+  function resize(width,height) { canvas.width=width; canvas.height=height; const c=canvas.getContext('2d'); c.fillStyle='#38566b';c.fillRect(0,0,width,height);if(socket?.readyState===1)socket.send('r,'+width+'x'+height+',primary'); }
+  resize(1024,768);
+  addEventListener('message', event => {
+    if(event.origin===location.origin && event.source===parent && event.data?.type==='setManualResolution' && socket?.readyState===1)
+      resize(event.data.width,event.data.height);
+  });
+  // Deliberately finish iframe load before socket readiness. Pre-open sizes are lost.
+  setTimeout(() => {
+    socket = new WebSocket(location.origin.replace('http','ws')+location.pathname+'api/websockets');
+    socket.onopen=() => window.postMessage({type:'pipelineStatusUpdate',video:true},location.origin);
+  },800);
 `
 )
 const upstream = new WebSocketServer({ host: '127.0.0.1', port: 0 })

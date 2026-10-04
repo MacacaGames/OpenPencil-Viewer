@@ -9,6 +9,22 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
     packets: number[] = [],
     reportedStreams = new Set<string>()
   let account = 'A'
+  let approvedDisplay: { width: number; height: number } | undefined
+  page.on('response', (response) => {
+    if (
+      response.ok() &&
+      response.request().method() === 'POST' &&
+      /\/api\/(?:files\/[^/]+\/remote|remote\/[^/]+\/display)$/.test(
+        new URL(response.url()).pathname
+      )
+    )
+      void response
+        .json()
+        .then((body) => {
+          approvedDisplay = body.display
+        })
+        .catch(() => undefined)
+  })
   page.on('request', (request) => requests.push(request.url()))
   await page.addInitScript(() => {
     const seen = new WeakSet<HTMLVideoElement>()
@@ -77,6 +93,41 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
   await page.getByRole('button', { name: /^A.fig/ }).dblclick()
   const frame = page.frameLocator('iframe[title="OpenPencil 遠端畫面"]')
   const video = frame.locator('video').first()
+  const decodedSize = () =>
+    video.evaluate((element) => ({
+      width: (element as HTMLVideoElement).videoWidth,
+      height: (element as HTMLVideoElement).videoHeight
+    }))
+  const waitForDisplay = async () => {
+    await expect
+      .poll(
+        async () => {
+          const actual = await decodedSize()
+          const approved = approvedDisplay
+          // X11/capture may align a few pixels. A decoded bootstrap frame is not ready.
+          return (
+            !!approved &&
+            Math.abs(actual.width - approved.width) <= 8 &&
+            Math.abs(actual.height - approved.height) <= 8 &&
+            actual.width <= 1920 &&
+            actual.height <= 1080
+          )
+        },
+        {
+          timeout: 20000,
+          message: 'decoded H.264 must converge to the authorized viewport size'
+        }
+      )
+      .toBe(true)
+    return decodedSize()
+  }
+  const nextDisplay = () =>
+    page.waitForResponse(
+      (response) =>
+        response.ok() &&
+        response.request().method() === 'POST' &&
+        /\/api\/remote\/[^/]+\/display$/.test(new URL(response.url()).pathname)
+    )
   await Promise.race([
     video.waitFor({ state: 'visible', timeout: 150000 }),
     page
@@ -99,10 +150,7 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
       { timeout: 15000 }
     )
     .toBeGreaterThan(0)
-  const rendered = await video.evaluate((element) => ({
-    width: (element as HTMLVideoElement).videoWidth,
-    height: (element as HTMLVideoElement).videoHeight
-  }))
+  const rendered = await waitForDisplay()
   const firstDecodedFrameMs =
     (await video.evaluate(() =>
       Number(Reflect.get(window, '__portalFirstDecodedFrameAt'))
@@ -148,7 +196,9 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
   expect(requests.some((url) => /\/(scene|content)(?:\?|$)/.test(url))).toBe(
     false
   )
+  const resized = nextDisplay()
   await page.setViewportSize({ width: 1100, height: 720 })
+  approvedDisplay = (await (await resized).json()).display
   console.log(
     'resize state',
     await frame.locator('body').evaluate(() => ({
@@ -158,18 +208,14 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
       manual: Reflect.get(window, 'manual_resolution')
     }))
   )
-  await expect
-    .poll(() => video.evaluate((v) => (v as HTMLVideoElement).videoWidth), {
-      timeout: 15000
-    })
-    .not.toBe(rendered.width)
-  expect(
-    await video.evaluate((v) => (v as HTMLVideoElement).videoWidth)
-  ).toBeLessThanOrEqual(1920)
+  const resizedDisplay = await waitForDisplay()
+  expect(resizedDisplay.width).not.toBe(rendered.width)
   const beforeUi = await video.evaluate(
     (v) => (v as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames
   )
+  const uiChanged = nextDisplay()
   await page.getByRole('combobox', { name: '遠端文字大小' }).selectOption('1.5')
+  await uiChanged
   await expect
     .poll(() =>
       video.evaluate(
@@ -178,10 +224,13 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
       )
     )
     .toBeGreaterThan(beforeUi)
+  const expanded = nextDisplay()
   await page.getByRole('button', { name: '全螢幕', exact: true }).click()
   await expect
     .poll(() => page.evaluate(() => Boolean(document.fullscreenElement)))
     .toBe(true)
+  approvedDisplay = (await (await expanded).json()).display
+  await waitForDisplay()
   await page.evaluate(() => document.exitFullscreen())
   console.log(
     JSON.stringify({
@@ -207,6 +256,7 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
   expect(after.sourceHash).toBe(before.sourceHash)
   expect(after.sourceMtime).toBe(before.sourceMtime)
   account = 'B'
+  approvedDisplay = undefined
   await page.getByRole('link', { name: 'Google Workspace 登入' }).click()
   const warmStart = Date.now()
   await page.getByRole('button', { name: /^A.fig/ }).dblclick()
@@ -224,6 +274,7 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
       { timeout: 15000 }
     )
     .toBeGreaterThan(0)
+  await waitForDisplay()
   const second = await (
     await page.request.get(origin + '/__fixture/status')
   ).json()

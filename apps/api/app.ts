@@ -688,9 +688,11 @@ export function createPortal(
           ? 'page'
           : suffix === 'selkies-core.js'
             ? 'core'
-            : suffix === 'manifest.json'
-              ? 'manifest'
-              : 'unknown'
+            : suffix === 'portal-client.js'
+              ? 'client'
+              : suffix === 'manifest.json'
+                ? 'manifest'
+                : 'unknown'
       })
     )
     c.header(
@@ -699,7 +701,13 @@ export function createPortal(
     )
     if (!suffix)
       return c.html(
-        '<!DOCTYPE html><html><head><meta charset="utf-8"><title>OpenPencil 唯讀串流</title></head><body><div id="app"></div><script type="module" src="selkies-core.js"></script></body></html>'
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><title>OpenPencil 唯讀串流</title></head><body><div id="app"></div><script src="portal-client.js"></script><script type="module" src="selkies-core.js"></script></body></html>'
+      )
+    if (suffix === 'portal-client.js')
+      return c.body(
+        readFileSync(resolve(config.webPath, '../api/remote-client.js')),
+        200,
+        { 'Content-Type': 'application/javascript' }
       )
     if (suffix === 'selkies-core.js')
       return c.body(readFileSync(remote.worker.corePath), 200, {

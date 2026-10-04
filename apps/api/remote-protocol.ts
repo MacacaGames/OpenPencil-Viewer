@@ -33,7 +33,16 @@ export function remoteInput(
     try {
       const raw = JSON.parse(input.slice(9))
       if (!raw || Array.isArray(raw) || typeof raw !== 'object') return
-      const size = dimensions(raw.initialClientWidth, raw.initialClientHeight)
+      // Portal can set manual size before the core socket opens. Preserve those
+      // bounded physical dimensions when normalizing the initial SETTINGS.
+      const size = dimensions(
+        raw.manual_resolution === true
+          ? raw.manual_width
+          : raw.initialClientWidth,
+        raw.manual_resolution === true
+          ? raw.manual_height
+          : raw.initialClientHeight
+      )
       const finite = (value: unknown, fallback: number) =>
         Number.isFinite(Number(value)) ? Number(value) : fallback
       const safe: Record<string, unknown> = {

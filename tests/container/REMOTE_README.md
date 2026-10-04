@@ -32,4 +32,8 @@ docker rm openpencil-selkies-synthetic-test
 
 Playwright Chromium 未安裝時，可指定 `REMOTE_TEST_BROWSER` 為已安裝 Chrome 完整路徑。CPU／軟體結果與 GPU 驗收分開。測試核對 actual H.264 decode、動態 video resolution、公開頁沒有FIG/scene請求、登出profile清理、合成來源hash/mtime。啟動即註冊 requestVideoFrameCallback，避免靜態畫面第一張已呈現後才等待「下一張」造成假 timeout。
 
+串流開始可能先解碼預設1024×768的 bootstrap frame；第一張影片不代表尺寸同步完成。測試以 browser DPR2 開啟，等待實際解碼尺寸符合 Portal 回應的核准尺寸（允許8px capture 對齊），再驗證 Retina 與1080p像素上限；視窗resize、全螢幕與第二個帳號開啟也必須達到核准尺寸。沒有任意固定 sleep 或取消解析度檢查。
+
+串流頁載入 adapter 的 `portal-client.js`，將 pinned Selkies core 送給 iframe 自己的 video-ready 事件，轉成固定的同源父視窗通知；外層依 Origin／iframe source 驗證後重送尺寸。初始 SETTINGS 也保留經上限限制的 manual width/height。若看到早期 `Cannot send resolution ... Connection not open`，需確認後續尺寸是否同步；若一直停在1024×768，仍屬失敗。`tests/e2e/remote.spec.ts` 另有 socket 晚於 iframe load 的合成回歸案例。
+
 原生 UI 編輯與 reload 清除另由 tests/e2e/remote.spec.ts 驗證；此 H.264 gate 核對真實 Linux Chromium 啟動、串流、輸入、resize、隔離和清理，不能把它當作 Unraid GPU／所有編輯工具驗收。

@@ -128,6 +128,21 @@ test('Google remote: source stays internal, WS binds owner/Origin, logout destro
       streamCookie = response.headers.getSetCookie()[0].split(';')[0]
     assert.ok(active)
     const cookies = A.cookie + '; ' + streamCookie
+    const clientAsset = lease.url + 'portal-client.js'
+    assert.equal((await request(clientAsset)).status, 401)
+    assert.equal(
+      (
+        await request(clientAsset, {
+          headers: { Cookie: B.cookie + '; ' + streamCookie }
+        })
+      ).status,
+      401
+    )
+    const bootstrap = await request(clientAsset, {
+      headers: { Cookie: cookies }
+    })
+    assert.equal(bootstrap.status, 200)
+    assert.match(await bootstrap.text(), /portalStreamReady/)
     const displayHeaders = {
       ...headers,
       Cookie: cookies,

@@ -115,7 +115,7 @@ function coreMessage(event: MessageEvent) {
     event.source !== frame.value?.contentWindow
   )
     return
-  if (event.data?.type === 'clientRoleUpdate') fitScreen()
+  if (event.data?.type === 'portalStreamReady') fitScreen()
 }
 watch(uiScale, () => {
   try {

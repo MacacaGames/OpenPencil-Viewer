@@ -76,6 +76,19 @@ test('Remote protocol rejects export/control messages and caps physical resoluti
   assert.equal(settings.encoder, 'h264enc')
   assert.equal(settings.use_cpu, undefined)
   assert.equal(settings.file_transfers, undefined)
+  const manual = JSON.parse(
+    remoteInput(
+      'SETTINGS,{"manual_resolution":true,"manual_width":7680,"manual_height":4320,"file_transfers":"download"}',
+      limits
+    )!.slice(9)
+  )
+  assert.deepEqual(
+    [manual.initialClientWidth, manual.initialClientHeight],
+    [1920, 1080]
+  )
+  assert.equal(manual.manual_resolution, false)
+  assert.equal(manual.manual_width, undefined)
+  assert.equal(manual.file_transfers, undefined)
   const invalid = JSON.parse(
     remoteInput(
       'SETTINGS,{"scaling_dpi":"NaN","displayScale":"Infinity"}',
