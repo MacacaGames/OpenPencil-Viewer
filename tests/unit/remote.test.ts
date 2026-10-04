@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { remoteInput } from '../../apps/api/remote-protocol.ts'
+import {
+  remoteInput,
+  createRemoteInput
+} from '../../apps/api/remote-protocol.ts'
 import { assertRemoteMount } from '../../apps/api/remote-mount.ts'
 import { parseConfig } from '../../apps/api/config.ts'
 import { readFileSync } from 'node:fs'
@@ -80,19 +83,68 @@ test('Remote protocol rejects export/control messages and caps physical resoluti
   assert.equal(invalid.scaling_dpi, 96)
   assert.equal(invalid.displayScale, 1)
 })
-test('Remote mount proof rejects local empty mount, writable mount and wrong NAS source', () => {
+test('Remote mount proof accepts operator-selected RO/RW and rejects empty/local/wrong NAS mounts', () => {
   const root = [{ id: 'designs', label: 'test', path: '/data/designs' }]
   const entry =
     '30 29 0:50 / /data/designs ro,relatime - cifs //nas/Designs rw,vers=3.1.1\n'
   assert.doesNotThrow(() => assertRemoteMount(root, '//nas/Designs', entry))
+  assert.doesNotThrow(() =>
+    assertRemoteMount(
+      root,
+      '//nas/Designs',
+      entry.replace('ro,relatime', 'rw,relatime')
+    )
+  )
+  assert.doesNotThrow(() =>
+    assertRemoteMount(
+      root,
+      ':/approved-export',
+      '342 328 0:138 / /data/designs rw,relatime - nfs4 :/approved-export rw,vers=4.0\n'
+    )
+  )
   for (const table of [
     entry.replace('cifs', 'ext4'),
-    entry.replace('ro,relatime', 'rw,relatime'),
+    entry.replace('/data/designs', '/data/designs-other'),
+    entry.replace('ro,relatime', 'relatime'),
     entry.replace('//nas/Designs', '//other/Designs'),
     ''
   ])
     assert.throws(() => assertRemoteMount(root, '//nas/Designs', table))
   assert.throws(() => assertRemoteMount(root, undefined, entry))
+})
+test('Session edits are explicitly Selkies-only; production DSM and raster cannot unlock', () => {
+  const raw = JSON.parse(
+    readFileSync('deploy/selkies/config.example.json', 'utf8')
+  )
+  raw.googleClientId = raw.googleClientSecret = 'synthetic'
+  assert.equal(parseConfig(raw).mode, 'session-edit')
+  assert.throws(
+    () => parseConfig({ ...raw, viewerMode: 'raster', remote: undefined }),
+    /session-edit/
+  )
+  assert.throws(
+    () => parseConfig({ ...raw, authorizationMode: 'dsm-strict' }),
+    /selkies requires/
+  )
+})
+test('Editing socket accepts text, delete and undo while rejecting browser/desktop escape chords', () => {
+  const input = createRemoteInput(limits, true)
+  for (const key of [97, 122, 65288, 65535, 0x01004e2d]) {
+    assert.equal(input('kd,' + key), 'kd,' + key)
+    assert.equal(input('ku,' + key), 'ku,' + key)
+  }
+  assert.equal(input('kd,65507'), 'kd,65507')
+  for (const key of [108, 111, 112, 115, 116, 119])
+    assert.equal(input('kd,' + key), undefined)
+  assert.equal(input('kd,122'), 'kd,122')
+  assert.equal(input('ku,122'), 'ku,122')
+  assert.equal(input('kd,65505'), 'kd,65505')
+  assert.equal(input('kd,99'), undefined)
+  assert.equal(input('kd,65481'), undefined)
+  assert.equal(input('kh,65507,111'), 'kh,65507')
+  assert.equal(input('kr'), 'kr')
+  assert.equal(input('cw,secret'), undefined)
+  assert.equal(createRemoteInput(limits, false)('kd,97'), undefined)
 })
 test('Exclusive lease reserves before startup, never shares controls, aborts and waits for cleanup', async () => {
   let started: RemoteLease | undefined,

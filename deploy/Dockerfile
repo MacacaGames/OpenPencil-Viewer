@@ -48,7 +48,7 @@ COPY --from=build /app/tools/nas ./tools/nas
 COPY --from=build /app/tools/remote ./tools/remote
 COPY deploy/selkies/chromium-policy.json /etc/chromium/policies/managed/portal.json
 COPY deploy/selkies/versions.json /app/versions.json
-LABEL org.opencontainers.image.title="OpenPencil read-only Portal" \
+LABEL org.opencontainers.image.title="OpenPencil LAN Portal" \
       org.opencontainers.image.version="0.1.0" \
       portal.features="raster,selkies" \
       portal.upstream.sha="8c72b62da07ea1f7e82de84c7c837c3c78dfbf95"

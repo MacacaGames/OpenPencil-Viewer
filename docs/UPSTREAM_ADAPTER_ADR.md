@@ -1,6 +1,6 @@
 # ADR 002 — Native App composition and a guarded design graph
 
-Status: implemented for the pinned SHA, subject to browser/graph gates. Scope: read-only LAN MVP.
+Status: implemented for the pinned SHA, subject to browser/graph gates. Scope: readonly viewers plus operator-approved Selkies session-edit (2026-10-04).
 
 The actual upstream exposes a native App and internal session/document APIs. It does not provide the component or whole-document readonly hook implied by a generic viewer integration. Compose `EditorWorkspace` with its native activated tab/store, and load bytes through actual FIG import/preparation. Preserve canvas, pages, layers and property inspector instead of recreating them.
 
@@ -13,3 +13,5 @@ Default-deny does require careful maintenance: newly introduced navigation/read 
 Update gate: pin candidate SHA → read ownership guides → archive candidate → checked patch application → package/native build → typecheck → adapter graph test → fixture browser render and readonly actions → external network test. Any failure keeps the old pin. No `submodule update --remote` in deployment. Roll back outer patch and lock together.
 
 Native selected-node inspection uses a SHA-specific hook in `packages/vue/src/editor/selection-state/nodes.ts`: shallow Core copies contain nested readonly proxies, so `cloneReadonlyValue` unwraps into an independent structured clone. No mutable graph target is returned. The native Design/Code tabs remain inspectable; field edits/code live preview are disabled. Core/Vue tests and browser property-panel acceptance cover this boundary.
+
+Selkies session-edit is an explicit exception to graph immutability. Mode comes from validated server config and ticket-protected private metadata, not a client query flag. Only RemoteDesktop opts out of post-layout locking; raster and public native keep it. Adapter-owned reactive capability derives from actual graph lock and sceneVersion, enabling native property/page/code controls. Persistence/export/source-binding guards apply regardless of graph mutability; autosave/recovery/storage/network remain disabled. Editable key filtering is per stream socket, excludes browser/desktop escape chords, and does not enable clipboard/file-transfer/commands. Reload/logout destroys edits. Tests cover mutable property/page/undo, forbidden egress, UI add/rename/delete/undo, reload reset, source integrity and readonly regressions. Upstream stays pinned/pristine; new UI changes live only in checked 0005-session-edit.patch applied to disposable build source.

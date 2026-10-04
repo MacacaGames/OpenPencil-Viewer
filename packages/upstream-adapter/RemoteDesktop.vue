@@ -10,7 +10,8 @@ import { MAX_SCENE_BYTES, SCENE_TYPE } from '../transport/scene-wire'
 const editor = createTab().store
 useKeyboard()
 const progress = ref('伺服器載入文件'),
-  error = ref('')
+  error = ref(''),
+  editable = ref(false)
 const abort = new AbortController()
 const ticket = new URLSearchParams(location.search).get('ticket') ?? ''
 const path = '/_remote/' + encodeURIComponent(ticket)
@@ -24,8 +25,9 @@ onMounted(async () => {
       cache: 'no-store'
     })
     if (!metadataResponse.ok) throw new Error('內部會話已結束')
-    const metadata: { name: string; revision: string } =
+    const metadata: { name: string; revision: string; mode: string } =
       await metadataResponse.json()
+    editable.value = metadata.mode === 'session-edit'
     const response = await fetch(path + '/scene', {
       signal: abort.signal,
       cache: 'no-store'
@@ -52,7 +54,8 @@ onMounted(async () => {
       },
       (phase, elapsedMs) => {
         timings[phase] = elapsedMs
-      }
+      },
+      editable.value
     )
     progress.value = ''
     await fetch(path + '/ready', {
@@ -86,6 +89,13 @@ onUnmounted(() => {
     @drop.capture.prevent.stop
     @dragover.prevent
   >
+    <div
+      v-if="editable"
+      class="shrink-0 border-b border-border px-4 py-2 text-xs"
+      data-test-id="session-edit-notice"
+    >
+      會話編輯 · 不儲存原檔 · 關閉或登出後修改會清除
+    </div>
     <div v-if="progress" role="status" class="shrink-0 px-4 py-2">
       {{ progress }}
     </div>

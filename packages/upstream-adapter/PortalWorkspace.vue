@@ -21,6 +21,7 @@ const documentId = ref('')
 const revision = ref('')
 const native = ref(false)
 const remote = ref(false)
+const editable = ref(false)
 const editor = createTab().store
 useKeyboard()
 const EditorWorkspace = defineAsyncComponent(
@@ -165,11 +166,13 @@ onMounted(async () => {
       provider: string
       authorization: string
       viewer: string
+      mode: string
     }>('/auth/mode')
     provider.value = mode.provider
     authorization.value = mode.authorization
     native.value = mode.viewer === 'native'
     remote.value = mode.viewer === 'selkies'
+    editable.value = remote.value && mode.mode === 'session-edit'
     await refresh()
     if (!viewing.value) return
     const id = new URLSearchParams(location.search).get('id')
@@ -240,7 +243,9 @@ onUnmounted(() => {
     >
       <a href="/" class="font-semibold">OpenPencil · LAN Portal</a>
       <span v-if="viewing" data-test-id="portal-document-name">{{ name }}</span>
-      <span class="rounded border border-border px-2 py-1 text-xs">唯讀</span>
+      <span class="rounded border border-border px-2 py-1 text-xs">{{
+        editable ? '會話編輯 · 不儲存' : '唯讀'
+      }}</span>
       <span
         v-if="authorization === 'google-mount'"
         class="text-xs text-muted"
@@ -263,7 +268,12 @@ onUnmounted(() => {
     <div v-if="!me" class="mx-auto my-16 flex max-w-lg flex-col gap-5 px-8">
       <h1 class="text-xl font-semibold">登入設計文件入口</h1>
       <p v-if="authorization === 'google-mount'">
-        Google Workspace 登入後可瀏覽此入口掛載的所有設計文件，使用唯讀 viewer。
+        Google Workspace 登入後可瀏覽此入口掛載的所有設計文件。
+        {{
+          editable
+            ? '可在遠端會話編輯，修改不儲存，關閉後清除。'
+            : '使用唯讀 viewer。'
+        }}
       </p>
       <p v-else>依你的 NAS 權限瀏覽 .fig，使用唯讀 viewer。</p>
       <template v-if="provider === 'mock'">
@@ -370,6 +380,7 @@ onUnmounted(() => {
       />
       <RemoteViewer
         v-else-if="remote && documentId && me"
+        :editable="editable"
         :document-id="documentId"
         :csrf="me.csrf"
       />

@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 const nonempty = v.pipe(v.string(), v.minLength(1))
 const schema = v.strictObject({
   version: v.literal(1),
-  mode: v.literal('read-only'),
+  mode: v.picklist(['read-only', 'session-edit']),
   environment: v.picklist(['development', 'production']),
   origin: v.pipe(v.string(), v.url()),
   host: nonempty,
@@ -82,6 +82,8 @@ export type Config = v.InferOutput<typeof schema>
 export function parseConfig(raw: unknown): Config {
   const config = v.parse(schema, raw)
   const origin = new URL(config.origin)
+  if (config.mode === 'session-edit' && config.viewerMode !== 'selkies')
+    throw new Error('session-edit requires the isolated selkies application')
   if (
     config.viewerMode === 'selkies' &&
     (config.authorizationMode !== 'google-mount' ||

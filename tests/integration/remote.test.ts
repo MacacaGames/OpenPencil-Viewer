@@ -194,11 +194,21 @@ test('Google remote: source stays internal, WS binds owner/Origin, logout destro
     await once(client, 'open')
     client.send('cmd,cat /run/secrets/google-oauth.json')
     client.send('cw,document-data')
+    client.send('kd,65507')
     client.send('kd,108')
+    client.send('ku,65507')
+    client.send('kd,97')
     client.send('r,7680x4320,primary')
     client.send('kd,32')
     await new Promise((r) => setTimeout(r, 100))
-    assert.deepEqual(received, ['_stats,1', 'r,1920x1080,primary', 'kd,32'])
+    assert.deepEqual(received, [
+      '_stats,1',
+      'kd,65507',
+      'ku,65507',
+      'kd,97',
+      'r,1920x1080,primary',
+      'kd,32'
+    ])
     const closed = once(client, 'close')
     assert.equal(
       (await request('/auth/logout', { method: 'POST', headers })).status,

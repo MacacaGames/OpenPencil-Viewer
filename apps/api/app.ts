@@ -297,7 +297,11 @@ export function createPortal(
   internalApp.get('/_remote/:ticket/metadata', async (c) => {
     const lease = await remote?.internal(c.req.param('ticket'))
     if (!lease) throw new AppError('not-found', 404)
-    return c.json({ name: lease.file.name, revision: lease.file.revision })
+    return c.json({
+      name: lease.file.name,
+      revision: lease.file.revision,
+      mode: config.mode
+    })
   })
   internalApp.get('/_remote/:ticket/scene', async (c) => {
     const lease = await remote?.internal(c.req.param('ticket'))
@@ -453,6 +457,7 @@ export function createPortal(
     c.json({
       provider: config.identityProvider,
       authorization: config.authorizationMode,
+      mode: config.mode,
       viewer:
         config.viewerMode === 'selkies'
           ? 'selkies'

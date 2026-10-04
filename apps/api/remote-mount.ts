@@ -19,7 +19,9 @@ export function assertRemoteMount(
       filesystem = right.split(' ')
     return (
       unescape(fields[4] ?? '') === roots[0].path &&
-      fields[5]?.split(',').includes('ro') &&
+      fields[5]
+        ?.split(',')
+        .some((option) => option === 'ro' || option === 'rw') &&
       ['cifs', 'nfs', 'nfs4'].includes(filesystem[0]) &&
       unescape(filesystem[1] ?? '') === expected
     )

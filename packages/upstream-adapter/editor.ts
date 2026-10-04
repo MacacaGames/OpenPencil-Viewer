@@ -11,7 +11,8 @@ export async function loadScene(
   name: string,
   signal: AbortSignal,
   progress: (phase: string) => void,
-  metrics?: (phase: string, elapsedMs: number) => void
+  metrics?: (phase: string, elapsedMs: number) => void,
+  editable = false
 ) {
   let checkpoint = performance.now()
   const measure = (phase: string) => {
@@ -34,7 +35,7 @@ export async function loadScene(
   try {
     await applyImportedDocument(editor, graph, load)
     measure('documentMaterializationMs')
-    // Materialize and layout all pages before immutability; page navigation changes only view state.
+    // Readonly viewers lock after layout. Private remote sessions can keep a mutable in-memory graph.
     for (const page of graph.getPages()) {
       timeout.throwIfAborted()
       await editor.preparePage(page.id, { signal: timeout })
@@ -42,7 +43,7 @@ export async function loadScene(
     measure('layoutMs')
     editor.state.documentName = name
     editor.state.autosaveEnabled = false
-    lockGraph(graph)
+    if (!editable) lockGraph(graph)
     await editor.fitCurrentPageToViewport()
     load.update({ phase: 'preparing-render' })
     editor.requestRender()

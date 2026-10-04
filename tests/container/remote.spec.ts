@@ -74,7 +74,7 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
   ).json()
   const start = Date.now()
   await page.getByRole('button', { name: /^A.fig/ }).dblclick()
-  const frame = page.frameLocator('iframe[title="OpenPencil 遠端唯讀畫面"]')
+  const frame = page.frameLocator('iframe[title="OpenPencil 遠端畫面"]')
   const video = frame.locator('video').first()
   await Promise.race([
     video.waitFor({ state: 'visible', timeout: 150000 }),
@@ -112,6 +112,7 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
   ).lease
   expect(rendered.width).toBeGreaterThan(64)
   expect(packets.length).toBeGreaterThan(0)
+  await page.screenshot({ path: '.work/selkies-ci/session-edit-stream.png' })
   const framesBefore = await video.evaluate(
     (v) => (v as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames
   )
@@ -220,4 +221,13 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
           .profiles
     )
     .toEqual([])
+  await expect(page.locator('iframe')).toHaveCount(0)
+  await expect(
+    page.getByRole('link', { name: 'Google Workspace 登入' })
+  ).toBeVisible()
+  const final = await (
+    await page.request.get(origin + '/__fixture/status')
+  ).json()
+  expect(final.sourceHash).toBe(before.sourceHash)
+  expect(final.sourceMtime).toBe(before.sourceMtime)
 })

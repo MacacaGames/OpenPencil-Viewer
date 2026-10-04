@@ -1,0 +1,102 @@
+--- a/src/components/PropertiesPanel.vue
++++ b/src/components/PropertiesPanel.vue
+@@ -1,4 +1,7 @@
+ <script setup lang="ts">
++import { useDocumentReadonly } from "../../portal/upstream-adapter/editor-capabilities"
++import { useEditorStore } from "@/app/editor/active-store"
++const readonly = useDocumentReadonly(useEditorStore())
+ import { TabsContent, TabsList, TabsRoot, TabsTrigger } from 'reka-ui'
+ 
+ import { useI18n } from '@open-pencil/vue'
+@@ -54,7 +57,7 @@
+         :force-mount="true"
+         :hidden="activeTab !== 'design'"
+       >
+-        <fieldset disabled class="flex min-h-0 flex-1 flex-col"><DesignPanel /></fieldset>
++        <fieldset :disabled="readonly" class="flex min-h-0 flex-1 flex-col"><DesignPanel /></fieldset>
+       </TabsContent>
+ 
+       <TabsContent
+--- a/src/components/PagesPanel.vue
++++ b/src/components/PagesPanel.vue
+@@ -1,4 +1,7 @@
+ <script setup lang="ts">
++import { useDocumentReadonly } from "../../portal/upstream-adapter/editor-capabilities"
++import { useEditorStore } from "@/app/editor/active-store"
++const readonly = useDocumentReadonly(useEditorStore())
+ import { templateRef } from '@vueuse/core'
+ import {
+   ContextMenuContent,
+@@ -53,8 +56,8 @@
+ 
+ function startRename(pg: PageItem, renamePage: (pageId: string, name: string) => void) {
+   setPageActions(renamePage)
+-  void pg
+-  // LAN readonly: no page rename.
++  if (readonly.value) return
++  rename.start(pg.id, pg.name)
+ }
+ 
+ function pageDropPosition(pg: PageItem): 'before' | 'after' | undefined {
+@@ -89,7 +92,7 @@
+     <div data-test-id="pages-panel" :class="baseStyles.panel()">
+       <div :class="baseStyles.header()">
+         <span data-test-id="pages-header" :class="baseStyles.title()">{{ panels.pages }}</span>
+-        <IconButton :label="panels.addPage" data-test-id="pages-add" :disabled="true" @click="actions.add()">
++        <IconButton :label="panels.addPage" data-test-id="pages-add" :disabled="readonly" @click="actions.add()">
+           <icon-lucide-plus class="size-3.5" />
+         </IconButton>
+       </div>
+--- a/src/components/CodePanel.vue
++++ b/src/components/CodePanel.vue
+@@ -1,4 +1,5 @@
+ <script setup lang="ts">
++import { useDocumentReadonly } from "../../portal/upstream-adapter/editor-capabilities"
+ import { useClipboard, useDebounceFn } from '@vueuse/core'
+ import { tv } from 'tailwind-variants'
+ import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+@@ -60,7 +61,8 @@
+   { value: 'tailwind-jsx' as const, label: code.value.sourceTailwindJSX },
+   { value: 'html-css' as const, label: code.value.sourceHTMLCSS }
+ ])
+-const readOnly = computed(() => true)
++const readonly = useDocumentReadonly(store)
++const readOnly = computed(() => readonly.value || source.value === 'tailwind-jsx')
+ const dirty = computed(() => draft.value !== baseline.value)
+ const editorLabel = computed(() =>
+   source.value === 'html-css' ? code.value.editorHTMLCSSLabel : code.value.editorDesignLabel
+--- a/src/components/DesignPanel.vue
++++ b/src/components/DesignPanel.vue
+@@ -15,7 +15,6 @@
+ import VariantAuthoringSection from './properties/component-properties/VariantAuthoringSection.vue'
+ import ConstraintsSection from './properties/constraints/ConstraintsSection.vue'
+ import EffectsSection from './properties/EffectsSection.vue'
+-import ExportSection from './properties/ExportSection.vue'
+ import FillSection from './properties/FillSection.vue'
+ import FramePresetSelect from './properties/frame-presets/FramePresetSelect.vue'
+ import FramePresetsSection from './properties/frame-presets/FramePresetsSection.vue'
+@@ -98,7 +97,6 @@
+     <FillSection />
+     <StrokeSection />
+     <EffectsSection />
+-    <ExportSection />
+   </div>
+ 
+   <!-- Single selection: retain one paused subtree while frame presets are shown. -->
+@@ -173,8 +171,7 @@
+       <LayoutGridSection v-if="supportsLayoutGuides" />
+       <EffectsSection />
+ 
+-      <ExportSection />
+     </div>
+   </RetainedPanel>
+ 
+   <div
+@@ -184,7 +181,6 @@
+   >
+     <PageSection />
+     <VariablesSection @open-dialog="variablesOpen = true" />
+-    <ExportSection />
+   </div>
+ 
+   <VariablesDialog v-model:open="variablesOpen" />

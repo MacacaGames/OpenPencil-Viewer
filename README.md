@@ -1,6 +1,6 @@
 # OpenPencil × Synology LAN Portal
 
-本輪是唯讀 MVP。原始 `.fig` 保留在 NAS；Google 僅做 OIDC 登入。完整原生 OpenPencil UI 位於乾淨、固定 SHA 的官方 submodule，Portal 的 patch 僅套入 `.work/editor`。
+raster／一般 native viewer 是唯讀；Unraid Selkies 另支援操作員授權的會話編輯（修改不儲存）。原始 `.fig` 保留在 NAS；Google 僅做 OIDC 登入。完整原生 OpenPencil UI 位於乾淨、固定 SHA 的官方 submodule，Portal 的 patch 僅套入 `.work/editor`。
 
 **目前可用：本機 Mock A/B → 不同列表 → 雙擊 → 原生 canvas/pages/layers/properties 唯讀檢視，以及已測 arm64／amd64 Docker 映像、HTTPS staging 與真實 Google 正常登入驗證。正式 NAS 尚不可用：dsm-strict native provider 待實作與實機 ACL 驗證，現在 fail closed。** 原檔 RO／Linux confinement／大 FIG headless 格式解析已測；三份真實 FIG 的原生瀏覽器載入已測；NAS、GPU 記憶體與視覺 fidelity 驗收仍待進行。詳見 [實作狀態](docs/IMPLEMENTATION_STATUS.md) 與 [手動部署清單](docs/OPERATOR_HANDOFF.md)。
 
@@ -8,7 +8,7 @@
 
 Docker 操作員先看 [QUICK_START](QUICK_START.md)：已依公司 [ApeRelay](https://github.com/macacagames/aperelay) 加入根目錄 Compose、`.env`、GitHub Actions／GHCR 兩平台發布流程。已有 tar 映像及舊 GHCR 版本；此次完整功能映像的 workflow 修改仍待 GitHub 實跑與發布。詳見 [部署慣例對照](docs/DEPLOYMENT_CONVENTIONS.md)。
 
-Unraid 遠端唯讀方案請看 [Selkies 部署與換卡手冊](docs/UNRAID_SELKIES.zh-TW.md)：一般 CI 映像包含固定 Selkies／Chromium，原生 UI 留在伺服器，瀏覽器只接收已授權 H.264 串流。使用一般 `latest`／`sha-*`／版本標籤，由 `viewerMode` 選 raster 或 Selkies，無需另選功能標籤。兩平台 image job 在原生 runner 上驗證 raster 和實際 CPU 串流、UID10001／99、resize／隔離／清理，再 push 已測映像；此次 workflow 修改仍待 GitHub 實跑。提供獨立 Compose、PCI 裝置選擇、VA-API／CPU 診斷與可選離線匯出；Unraid／R7 250／NAS 掛載及真實效能仍需操作員手動驗收。原 raster 部署保留，`dsm-strict` 未因此取得原生 ACL 驗收。
+Unraid 遠端方案請看 [Selkies 部署與換卡手冊](docs/UNRAID_SELKIES.zh-TW.md)：一般 CI 映像包含固定 Selkies／Chromium，原生 UI 留在伺服器，瀏覽器只接收已授權 H.264 串流。使用一般 `latest`／`sha-*`／版本標籤，由 `viewerMode` 選 raster 或 Selkies，無需另選功能標籤。Selkies 範例使用 `mode: "session-edit"` 開放物件／屬性／頁面編輯，修改只存在伺服器會話記憶體；NAS mount 可 RO／RW，沒有儲存／匯出／NAS 寫回，reload／logout 清除修改。兩平台 image job 在原生 runner 上驗證 raster 和實際 CPU 串流、UID10001／99、resize／隔離／清理，再 push 已測映像；此次 workflow 修改仍待 GitHub 實跑。提供獨立 Compose、PCI 裝置選擇、VA-API／CPU 診斷與可選離線匯出；Unraid／R7 250／NAS 掛載及真實效能仍需操作員手動驗收。原 raster 部署保留，`dsm-strict` 未因此取得原生 ACL 驗收。
 
 ```sh
 git submodule update --init --recursive

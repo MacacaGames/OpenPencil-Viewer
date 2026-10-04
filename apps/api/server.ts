@@ -77,7 +77,7 @@ const server = serve(
   { fetch: portal.app.fetch, hostname: config.host, port: config.port },
   () =>
     console.log(
-      `Portal ${config.identityProvider}/${config.authorizationMode}: ${config.origin}`
+      `Portal ${config.identityProvider}/${config.authorizationMode}: ${config.origin} viewer=${config.viewerMode ?? (config.environment === 'production' ? 'raster' : 'native')} mode=${config.mode}`
     )
 )
 const privateServer =

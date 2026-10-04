@@ -30,6 +30,7 @@ export async function createGoogleFixture(
   port = 3213,
   options: {
     viewerMode?: 'raster' | 'selkies'
+    mode?: 'read-only' | 'session-edit'
     sourceRoot?: string
     remoteWorker?: RemoteWorker
   } = {}
@@ -45,7 +46,9 @@ export async function createGoogleFixture(
   writeFileSync(source + '/ignored.txt', 'synthetic only')
   const config = parseConfig({
     version: 1,
-    mode: 'read-only',
+    mode:
+      options.mode ??
+      (options.viewerMode === 'selkies' ? 'session-edit' : 'read-only'),
     environment: 'development',
     origin: `http://127.0.0.1:${port}`,
     host: '127.0.0.1',

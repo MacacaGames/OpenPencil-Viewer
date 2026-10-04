@@ -2,7 +2,7 @@ import type { Server } from 'node:http'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import type { Config } from './config.ts'
 import type { createPortal } from './app.ts'
-import { remoteInput } from './remote-protocol.ts'
+import { createRemoteInput } from './remote-protocol.ts'
 
 export function attachRemoteStream(
   server: Server,
@@ -116,9 +116,13 @@ export function attachRemoteStream(
         portal.remote!.connections.add(close)
         portal.remote!.connected(lease)
         if (portal.remote!.active !== lease) return close()
+        const inputFilter = createRemoteInput(
+          config.remote!,
+          config.mode === 'session-edit'
+        )
         client.on('message', (bytes, binary) => {
           if (binary) return // Audio, webcam and binary upload have no role in this viewer.
-          const input = remoteInput(bytes.toString(), config.remote!)
+          const input = inputFilter(bytes.toString())
           if (
             input &&
             source.readyState === WebSocket.OPEN &&

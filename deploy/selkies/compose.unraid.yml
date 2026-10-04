@@ -19,7 +19,7 @@ services:
       GPU_ENCODE_PCI: ${GPU_ENCODE_PCI:-auto}
       GPU_RENDER_MODE: ${GPU_RENDER_MODE:-auto}
       GPU_ENCODER_MODE: ${GPU_ENCODER_MODE:-auto}
-    # Read-only source; choose exactly the approved share/subdirectory.
+    # Choose exactly the approved share/subdirectory; source access is operator-selected.
     volumes:
       - type: bind
         source: ${PORTAL_CONFIG_DIR:?Set dedicated config directory path}
@@ -34,7 +34,7 @@ services:
       - type: bind
         source: ${NAS_DESIGNS_PATH:?Set approved mounted share path}
         target: /data/designs
-        read_only: true
+        read_only: ${NAS_READ_ONLY:-false}
         bind: { create_host_path: false, propagation: rprivate }
       - type: bind
         source: ${LOCAL_STATE_PATH:?Set local Unraid storage path}

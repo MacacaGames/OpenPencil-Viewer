@@ -103,7 +103,7 @@ writeFileSync(
       pending: [
         'Unraid/Docker/libseccomp/kernel compatibility',
         'actual R7 250 / RX 5600 / RX 5700 renderer and encode diagnostics',
-        'approved read-only CIFS/NFS mount and outage checks',
+        'approved CIFS/NFS source and outage checks (operator-selected RO/RW)',
         'real Google Workspace callback/proxy',
         'Unraid representative FIG performance, DPI and text quality'
       ],

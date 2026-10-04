@@ -26,7 +26,7 @@ async function login(page: import('@playwright/test').Page) {
   await page.getByRole('link', { name: 'Google Workspace 登入' }).click()
   await expect(page.getByRole('heading', { name: '設計文件' })).toBeVisible()
 }
-test('Remote Portal browser receives no document graph; private native adapter preserves readonly UI', async ({
+test('Remote browser receives no graph; private native session edits remain in memory and clear on reload', async ({
   page,
   browser
 }) => {
@@ -38,7 +38,7 @@ test('Remote Portal browser receives no document graph; private native adapter p
   page.on('request', (request) => requests.push(request.url()))
   await login(page)
   await page.getByRole('button', { name: /^A.fig/ }).dblclick()
-  const iframe = page.frameLocator('iframe[title="OpenPencil 遠端唯讀畫面"]')
+  const iframe = page.frameLocator('iframe[title="OpenPencil 遠端畫面"]')
   await expect(iframe.locator('#synthetic-stream')).toBeVisible()
   await expect(page.locator('canvas')).toHaveCount(0)
   expect(requests.some((url) => /\/(scene|content)(?:\?|$)/.test(url))).toBe(
@@ -70,12 +70,48 @@ test('Remote Portal browser receives no document graph; private native adapter p
       )
     )
   ).toEqual([])
-  await expect(native.getByTestId('pages-add')).toBeDisabled()
+  let downloads = 0
+  native.on('download', () => downloads++)
+  const external: string[] = []
+  native.on('request', (request) => {
+    if (!request.url().startsWith('http://127.0.0.1:8085/'))
+      external.push(request.url())
+  })
+  await expect(native.getByTestId('session-edit-notice')).toBeVisible()
+  await expect(native.getByTestId('pages-add')).toBeEnabled()
   await expect(native.getByTestId('pages-item')).toHaveCount(2)
   await native.getByTestId('pages-item').filter({ hasText: 'Page 2' }).click()
   await expect(
     native.getByTestId('layers-item').filter({ hasText: 'LAN fixture circle' })
   ).toBeVisible()
+  const circle = native
+    .getByTestId('layers-item')
+    .filter({ hasText: 'LAN fixture circle' })
+  await circle.click()
+  await expect(
+    native.getByTestId('properties-panel').locator('fieldset')
+  ).toBeEnabled()
+  await native.keyboard.press('Delete')
+  await expect(circle).toHaveCount(0)
+  await native.keyboard.press('ControlOrMeta+z')
+  await expect(circle).toBeVisible()
+  await native.getByTestId('pages-add').click()
+  await expect(native.getByTestId('pages-item')).toHaveCount(3)
+  await native.getByTestId('pages-item').last().dblclick()
+  await native.getByTestId('pages-item-input').fill('Temporary session page')
+  await native.getByTestId('pages-item-input').press('Enter')
+  await expect(native.getByTestId('pages-item').last()).toHaveText(
+    'Temporary session page'
+  )
+  await native.keyboard.press('ControlOrMeta+s')
+  await native.reload()
+  await expect(native.getByRole('status')).toHaveCount(0, { timeout: 60000 })
+  await expect(native.getByTestId('pages-item')).toHaveCount(2)
+  await expect(
+    native.getByText('Temporary session page', { exact: true })
+  ).toHaveCount(0)
+  expect(downloads).toBe(0)
+  expect(external).toEqual([])
   await internalContext.close()
   await page.getByRole('button', { name: '登出', exact: true }).click()
   await expect(page.locator('iframe')).toHaveCount(0)

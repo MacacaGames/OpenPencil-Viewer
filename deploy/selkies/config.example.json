@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "mode": "read-only",
+  "mode": "session-edit",
   "environment": "production",
   "origin": "https://openpencil.macaca.games",
   "host": "0.0.0.0",
@@ -9,9 +9,15 @@
   "authorizationMode": "google-mount",
   "viewerMode": "selkies",
   "allowedHostedDomains": ["macaca.games"],
-  "statePath": "/state/google-mount.sqlite",
+  "statePath": "/state/unraid-google-mount.sqlite",
   "webPath": "/app/dist/web",
-  "roots": [{ "id": "designs", "label": "Designs", "path": "/data/designs" }],
+  "roots": [
+    {
+      "id": "designs",
+      "label": "Designs",
+      "path": "/data/designs"
+    }
+  ],
   "maxFileBytes": 536870912,
   "maxDownloads": 4,
   "scanIntervalMs": 60000,

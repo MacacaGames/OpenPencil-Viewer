@@ -28,5 +28,28 @@ export function guardAppEditor<T extends { graph: object }>(editor: T): T {
   guardEditor(editor, () => editor.graph)
   for (const [name, descriptor] of saved)
     Object.defineProperty(editor, name, descriptor)
+  // Even a mutable remote graph has no filesystem/storage/export capability.
+  for (const name of [
+    'saveFigFile',
+    'saveFigFileAs',
+    'openFigFile',
+    'openDOMFile',
+    'setDocumentSource',
+    'setStorageDocumentSource',
+    'setPlannedFilePath',
+    'startWatchingCurrentFile',
+    'adoptRecoverySnapshot',
+    'persistRecoveryNow',
+    'exportTarget',
+    'exportTargets',
+    'exportSelection'
+  ]) {
+    const descriptor = Object.getOwnPropertyDescriptor(editor, name)
+    if (descriptor && typeof descriptor.value === 'function')
+      Object.defineProperty(editor, name, {
+        ...descriptor,
+        value: async () => false
+      })
+  }
   return editor
 }

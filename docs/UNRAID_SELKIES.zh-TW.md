@@ -1,6 +1,8 @@
-# Unraid Selkies 唯讀 OpenPencil
+# Unraid Selkies OpenPencil：會話編輯，不寫回
 
-一般 CI／GHCR 映像同時包含 raster viewer、Selkies 與 Chromium，使用既有 `latest`、`sha-*`、branch／version 標籤即可；由設定 `viewerMode: "selkies"` 選擇遠端唯讀模式，無需 Selkies 專用映像標籤。現有 raster viewer 仍可用獨立設定／部署，也可保留舊映像 digest 回復。身份採已接受的 Google Workspace `google-mount`：合格組織帳號共用設定的唯讀目錄。這不代表 DSM 個人 ACL 已完成；`dsm-strict` 的 fail closed 行為保留。
+一般 CI／GHCR 映像同時包含 raster viewer、Selkies 與 Chromium，使用既有 `latest`、`sha-*`、branch／version 標籤即可；由設定 `viewerMode: "selkies"` 選擇遠端模式，無需 Selkies 專用映像標籤。現有 raster viewer 仍可用獨立設定／部署，也可保留舊映像 digest 回復。身份採已接受的 Google Workspace `google-mount`：合格組織帳號共用設定的指定目錄。這不代表 DSM 個人 ACL 已完成；`dsm-strict` 的 fail closed 行為保留。
+
+依操作員本次指示，Selkies 範例使用 `mode: "session-edit"`：原生 UI 可編輯物件、文字、屬性與頁面，修改只存在目前 Chromium 會話記憶體，重新載入、關閉或登出即清除。沒有儲存、匯出或 NAS 寫回；不要把它視為可保存工作的編輯器。`mode: "read-only"` 仍可鎖定遠端 UI，raster／一般 native viewer 維持唯讀。
 
 ## 交付與固定版本
 
@@ -46,7 +48,7 @@ flowchart LR
   B -->|已驗證 WebSocket：H.264 畫面與操作| P
   P -->|loopback :8086| S[Selkies / X11]
   S --> C[獨立 profile 的 Chromium]
-  C -->|loopback :8085：短效內部 ticket| A[原生唯讀 adapter]
+  C -->|loopback :8085：短效內部 ticket| A[原生會話 adapter]
   A -->|受控唯讀開檔| N[指定 NAS CIFS / NFS 目錄]
 ```
 
@@ -56,11 +58,11 @@ flowchart LR
 
 ## 部署參數與手動步驟
 
-尚未取得實際 Unraid 版本、GPU PCI ID、share／本機儲存路徑；範例故意留白。使用操作員已核准的指定 share／子目錄，不掛載整個 NAS volume。NAS 掛載由操作員在 Unraid 管理，不由應用程式建立或改動。對 NAS 的 mount 與容器 bind 都應唯讀。
+尚未取得實際 Unraid 版本、GPU PCI ID、share／本機儲存路徑；範例故意留白。使用操作員已核准的指定 share／子目錄，不掛載整個 NAS volume。NAS 掛載由操作員在 Unraid 管理，不由應用程式建立或改動。指定 NAS 掛載可由操作員選用 `rw` 或 `ro`，不再要求唯讀 mount bit；範例 `.env` 為 `NAS_READ_ONLY=false`。`rw` 表示容器身份有來源檔案系統寫入能力，應用仍無寫回路徑；它不等於 filesystem 唯讀。config／OAuth 與容器 root filesystem 仍唯讀，state/profile 則可寫且與 NAS 分離。
 
 1. 把 `deploy/selkies/` 放到獨立的部署目錄；保留原 raster 部署。複製 `env.example` 為 `.env`，`config.example.json` 為專用 config 目錄中的 `config.json`。改 `origin`、`allowedHostedDomains`，沿用既有 OAuth JSON；callback 為 `https://你的網域/auth/google/callback`。
 2. `.env` 填入 `PORTAL_CONFIG_DIR`、`GOOGLE_OAUTH_FILE`、`NAS_DESIGNS_PATH`、`LOCAL_STATE_PATH`。Unraid Compose 預設 `PORTAL_UID=99`／`PORTAL_GID=100`，可依需求設為10001:10001；state/profile 必須使用 Unraid 本機獨立儲存，既有資料需屬於選定 UID，config／OAuth／NAS 資料只需可讀。不要用 `chmod 777` 解決權限。
-3. `NAS_EXPECTED_SOURCE` 填入容器 `/proc/self/mountinfo` 顯示的實際來源，例如 `//NAS/approved-share` 或 `NAS:/approved-export`；不是 Unraid 本機 mountpoint。啟動要求 `/data/designs` 是 `ro` 的 `cifs`、`nfs` 或 `nfs4` 且來源完全相符；每次建立／續期／存取串流及 watchdog 都會重新檢查。來源 inode、revision、可讀性另由既有安全 index 驗證。
+3. `NAS_EXPECTED_SOURCE` 填入容器 `/proc/self/mountinfo` 顯示的實際來源，例如 `//NAS/approved-share` 或 `NAS:/approved-export`；不是 Unraid 本機 mountpoint。啟動要求 `/data/designs` 是精確掛載點、檔案系統為 `cifs`、`nfs` 或 `nfs4` 且來源完全相符；`ro`／`rw` 均可；每次建立／續期／存取串流及 watchdog 都會重新檢查。來源 inode、revision、可讀性另由既有安全 index 驗證。
 4. 匯入映像並先用 CPU／軟體渲染跑通登入與會話：`.env` 設 `GPU_ENCODER_MODE=cpu`、`GPU_RENDER_MODE=software`，使用主 Compose。主 Compose 不需要 DRM device。若使用 `auto` 且未提供 GPU，日誌明確顯示 CPU／software。
 5. 反向代理參考 `nginx.example.conf`；TLS、Origin、WebSocket Upgrade、長連線 timeout 均需成立。範例只 listen 主機 `127.0.0.1:24681`，代理需在同主機可達此位址。若代理另在容器，操作員須設計專用網路／對應 listener，不能將內部端點一起公開。
 6. 開始 GPU 診斷，填入精確 PCI 地址、DRM group 數值 GID，再加入 GPU overlay。正式手動部署命令如下：
@@ -78,6 +80,28 @@ docker compose --env-file .env -f compose.unraid.yml -f compose.gpu.yml up -d --
 Compose 使用 root filesystem readonly、cap_drop ALL、no-new-privileges、數值 non-root（Unraid 預設99:100）、私有 IPC、512MiB `/tmp`、1GiB `/dev/shm`、12GiB RAM、512 pids。Portal／Chromium 不取得 Docker socket。需要更多大文件記憶體時由操作員按量測調整 mem_limit，不因此變更 NAS mount。
 
 操作員也可選用 Unraid 常用的 `nobody:users` 數值身份 `99:100`：Docker CLI 將 `--user 10001:10001` 改為 `--user 99:100`，Compose 將 `user` 改為 `'99:100'`，並重建容器。此映像直接啟動 Node，沒有處理 `PUID`／`PGID` 的 root init；僅設定這兩個環境變數不會切換身份。專用本機 state 及其既有資料需屬於選定 UID，config／OAuth／NAS 來源需讓該身份可讀，DRM supplementary groups 仍須保留。`99:100` 的本機合成 SQLite 建立、`chmod 0600`、WAL 讀寫已驗證；完整 Unraid Chromium／GPU 會話仍待實機驗證。
+
+### 使用 Docker NFS named volume
+
+也可以由 Docker local driver 掛載操作員指定的 NFS export，再將 named volume 掛到 `/data/designs`；不需要 Portal 取得 mount capability。操作員目前已有 `openpencil_design`，其 driver 為 NFSv4／`rw`，可直接繼續使用；不需要另建 `openpencil_design_ro`。Unraid GUI 的 Design Host Path 填 `openpencil_design`、Container Path `/data/designs`、Access Mode Read/Write，CLI 對應 `-v openpencil_design:/data/designs:rw`。套用前確認實際 Docker 命令是 named volume，而不是新本機目錄。可自行選 Read Only，但不是新版程式的必要條件。
+
+操作員已提供此容器 mountinfo 的 filesystem 為 `nfs4`、source 為 `:/volume1/Gd`；這次部署 `NAS_EXPECTED_SOURCE=:/volume1/Gd`。`addr=10.0.1.1` 是 NFS mount option，不能將 source 自行改写為 DNS 名稱。容器重建後，單独執行下列一行確認實際來源；指定 share 僅限已核准目錄，`/state` 仍使用 Unraid 本機專用儲存。
+
+```sh
+awk '$5=="/data/designs" {print}' /proc/self/mountinfo
+```
+
+config 必須同時有 `viewerMode: "selkies"` 與完整 `remote` 物件，見 `config.example.json`；普通映像包含 Selkies 不會自動切換部署模式。沒有 `viewerMode` 的 production config 仍使用 raster。Selkies 啟動及會話檢查保留精確 root、NFS/CIFS 與 expected source 驗證，支援 `ro`／`rw`。開放 UI 編輯要將 config 的 `mode` 設為 `"session-edit"`；此值只允許 Selkies＋google-mount，不允許 raster 或 dsm-strict。
+
+若 `ls` 可列出文件，但 Portal 回503，先以實際掃描器檢查 metadata。將每個命令單獨貼到容器 Console，不把兩行接成同一行：
+
+```sh
+python3 /app/tools/filesystem/reader.py scan /data/designs | python3 -c 'import json,sys; x=json.load(sys.stdin); print({"identity":x["identity"],"entries":len(x["entries"])})'
+```
+
+成功後，再用 SQLite read-only connection 查看 `root_identity`，比對當前 `dev:inode`。舊來源改成 NFS、remount 或空本機 mountpoint 曾被索引，都可能造成 baseline 不符；程序會保留索引並拒絕讀取。先核對原始來源與實際掛載，再按下段採用本次獨立部署 state，不能刪除整份 SQLite、改以 root 執行或取消來源身份檢查來消除503。
+
+若操作員明確選擇全新的 Unraid `google-mount` 部署、無需舊 DSM／session／索引相容，可在核對指定NFS來源後改用新的本機 `statePath`，例如 `/state/unraid-google-mount.sqlite`，保留舊檔並重新Google登入。這是明確的新部署選擇；程序不會自行遇錯換state或忽略identity。Unraid共用瀏覽不查DSM users／directory，也不提供DSM個人ACL。既有dev:inode guard仍可能因後續NFS remount改變device number而拒絕服務；不能用一次新的state宣稱完成NAS重啟／重掛驗收。
 
 ## Chromium sandbox 與主機相容性
 
@@ -127,7 +151,7 @@ docker compose -f compose.unraid.yml -f compose.gpu.yml logs --tail 200 portal
 
 1. 結束使用者會話、停止串流容器，依主機正常程序換卡。
 2. 操作員確認現有核心驅動與 `/dev/dri`，重新跑 host probe。更新完整 PCI 地址與 GID；裝置可能不再是原 render node。
-3. 用相同映像、Portal、OAuth、FIG 格式重建容器，跑診斷與合成 encode，再建立唯讀會話檢查最终 stream_info。
+3. 用相同映像、Portal、OAuth、FIG 格式重建容器，跑診斷與合成 encode，再建立會話檢查最终 stream_info。
 4. 自動模式通過後可用強制 VA-API 做負向／成功驗收。不承諾執行中熱切換。
 
 GPU 主要影響 Chromium render、capture、encode；NAS 讀檔、FIG 解壓／解析、graph 建立與部分 layout 仍消耗 CPU／RAM。10GbE、PCIe x4 與128GB RAM不保證冷啟動即時。零拷貝未成立時 capture/upload 也有成本。
@@ -155,16 +179,17 @@ Unraid手動量測每個檔案至少冷開、同會話切頁與連續縮放／�
 
 本機Mac／DockerDesktop結果另記於 `docs/IMPLEMENTATION_STATUS.md`；不得當作5950X／R7／Unraid效能。伺服器packet時間與RTT不能推算精確單向傳輸時間，需瀏覽器requestVideoFrameCallback或同步量測補足。
 
-## 會話與唯讀驗收
+## 會話、編輯與來源完整性驗收
 
 第一階段一個活動会话，其他帳號得到明確忙碌提示。每次新會話有獨立Chromium profile、X display與encoder。stream cookie有效90秒，與Portal session及lease綁定；每30秒renew不延長Portal idle expiry。WS握手驗證Origin／雙cookie，1秒watchdog檢查session/文件/worker；斷線15秒清理。登出／撤銷／到期會終止stream，TERM/KILL子程序並刪除profile。不能把不同使用者共用同一Chromium畫面。
 
-Selkies proxy只轉送必要頁面/zoom/pan操作與ACK；阻擋命令、剪貼簿、檔案傳輸、音訊、webcam與二進位上傳，其他HTTP路由不代理。Chromiumpolicy停用下載／列印／檔案選擇／DevTools／外部URL／擴充套件。native adapter保留graph immutability／禁止save/autosave/external document traffic，IndexedDB改成每次會話的記憶體實作，避免上游帳密store初始化錯誤與文件落盤。
+Selkies proxy轉送頁面/zoom/pan操作與ACK；session-edit另允許文字、刪除、undo/redo與編輯快捷鍵，以每條WS的modifier狀態阻擋瀏覽器／桌面逃逸快捷鍵。阻擋命令、剪貼簿、檔案傳輸、音訊、webcam與二進位上傳，其他HTTP路由不代理。Chromiumpolicy停用下載／列印／檔案選擇／DevTools／外部URL／擴充套件。native adapter在read-only保留graph immutability；session-edit保留可變記憶體graph並啟用屬性面板、頁面新增／更名與原生編輯。兩種模式均禁止save/autosave/export/source binding/external document traffic，IndexedDB改成每次會話的記憶體實作，避免上游帳密store初始化錯誤與文件落盤。
 
 手動驗收：
 
 - 未登入不能開stream HTML、core或WS；錯Origin／到期credential／其他使用者不能接線，重複開啟收到busy。
-- 開文件前後核對原FIG SHA256及mtime；mount唯讀。DevTools中外部頁面只有文件列表、stream core與WS，沒有FIG或scene response。
+- 開文件前後核對原FIG SHA256及mtime；`rw`掛載時也須在UI編輯後保持不變。DevTools中外部頁面只有文件列表、stream core與WS，沒有FIG或scene response。
+- session-edit能新增／更名頁面、修改屬性與文字、刪除物件及undo/redo；Ctrl+S與匯出不得保存資料，重新載入應恢復原FIG。
 - 切頁、縮放、平移、全螢幕、DPI及視窗resize正常；確認遠端xrandr尺寸跟隨且受上限約束，沒有持續拉伸固定桌面。
 - 登出後畫面清除，WS關閉，`/state/remote/<lease>`被清理，下一個帳號使用新profile，不能看到舊畫面。正常停止容器也需清理。
 - 用同一組操作核對只出現一次parse；檢查renderer/encoder、fallback與資源峰值。R7無編碼時CPU模式可繼續，但單獨標示。
@@ -174,7 +199,7 @@ Selkies proxy只轉送必要頁面/zoom/pan操作與ACK；阻擋命令、剪貼�
 
 | 現象 | 檢查 |
 |---|---|
-| `remote-nas-mount-proof-required/unavailable` | source字串、ro、CIFS/NFS、精確target；空本機目录不符合 |
+| `remote-nas-mount-proof-required/unavailable` | source字串、CIFS/NFS、精確target（ro／rw均可）；空本機目录不符合 |
 | config/OAuth EACCES | 選定數值UID（Unraid預設99）讀取與父目錄traverse，不改NAS員工ACL |
 | state/profile EACCES | Unraid本機state owner／mount可寫；config保持RO |
 | SQLite `chmod EPERM` | 核對已建立容器的 `.Config.User`、`/state` host source／RW、檔案數值 owner 與 filesystem。GUI `--user 99:100` 不會自動改既有檔案 owner；本機專用 state 的 SQLite／WAL／SHM 須屬於99。若 owner 已99仍失敗，查 filesystem／掛載限制；不略過0600限制或改NAS ACL |
@@ -185,6 +210,6 @@ Selkies proxy只轉送必要頁面/zoom/pan操作與ACK；阻擋命令、剪貼�
 | 冷開慢、縮放慢 | 分開讀檔／parse／layout／GL／capture／encode／network；GPU只加速部分階段 |
 | cleanup失敗 | 新lease保持blocked；保存日誌後正常重建容器，不把另一帳號接到殘留display |
 
-回復：先停止 `openpencil-selkies`，將代理切回原獨立raster容器與原config/state；使用原 `deploy/compose.synology.yml`／既有操作紀錄。不要將Selkiesconfig直接交給舊映像；保留NASmount唯讀與GoogleWorkspace設定。raster同樣拒絕公開FIG／scene，以viewportPNG工作。回復不需要轉換FIG、更新OAuth或變更NAS ACL。
+回復：先停止 `openpencil-selkies`，將代理切回原獨立raster容器與原config/state；使用原 `deploy/compose.synology.yml`／既有操作紀錄。不要將Selkies的session-edit config直接交給raster／舊映像；改回mode read-only、移除remote設定，並將raster容器的NASmount設為唯讀，保留GoogleWorkspace設定。raster同樣拒絕公開FIG／scene，以viewportPNG工作。回復不需要轉換FIG、更新OAuth或變更NAS ACL。
 
 官方依據：[AMD／GPU與全色彩限制](https://docs.linuxserver.io/selkies/user-guide/gpu/)、[Selkies設定](https://docs.linuxserver.io/selkies/user-guide/configuration/)、[Chromium映像](https://docs.linuxserver.io/images/docker-chromium/)。實作核對的是上述固定版source與映像，不將moving latest能力當作已支援。
