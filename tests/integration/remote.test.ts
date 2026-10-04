@@ -23,7 +23,9 @@ import {
 } from '../helpers/google-mount-fixture.ts'
 import { fileId } from '../../packages/filesystem/index.ts'
 
-test('Google remote: source stays internal, WS binds owner/Origin, logout destroys display and profile lease', async () => {
+test('Google remote: source stays internal, WS binds owner/Origin, logout destroys display and profile lease', async (t) => {
+  const logs: string[] = []
+  t.mock.method(console, 'log', (value: unknown) => logs.push(String(value)))
   const base = realpathSync(mkdtempSync(resolve(tmpdir(), 'portal-remote-')))
   const upstream = new WebSocketServer({ port: 0, host: '127.0.0.1' })
   await once(upstream, 'listening')
@@ -265,6 +267,39 @@ test('Google remote: source stays internal, WS binds owner/Origin, logout destro
     await hardwareClosed
     assert.deepEqual(binary, [])
     assert.equal(stopped, 2)
+    const reports = logs.map((line) => JSON.parse(line))
+    assert.ok(
+      reports.some(
+        (report) =>
+          report.event === 'remote-stream-rejected' &&
+          report.stage === 'authorization' &&
+          report.errorCode === 'origin-rejected'
+      )
+    )
+    assert.equal(
+      reports.filter((report) => report.event === 'remote-stream-connected')
+        .length,
+      2
+    )
+    assert.deepEqual(
+      reports
+        .filter((report) => report.event === 'remote-session-stop')
+        .map((report) => report.reason),
+      ['logout', 'forced-vaapi-fallback']
+    )
+    assert.equal(
+      reports.filter((report) => report.event === 'remote-stream-closed')
+        .length,
+      2
+    )
+    for (const secret of [
+      A.cookie.split('=')[1],
+      streamCookie.split('=')[1],
+      lease.credential,
+      'document-data',
+      '/run/secrets/google-oauth.json'
+    ])
+      if (secret) assert.equal(logs.join('\n').includes(secret), false)
   } finally {
     client?.terminate()
     await fixture.portal.remote?.close()

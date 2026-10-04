@@ -19,24 +19,39 @@ export function validRelative(relative: string) {
     relative.split('/').every((p) => p && p !== '.' && p !== '..')
   )
 }
+export type SourceProof = { identity: string; mountId: number | null }
+export type IndexedRoot = {
+  id: string
+  path: string
+  identity: string
+  sourceIdentity?: string
+}
 export class FileIndex {
   records = new Map<string, FileRecord>()
   identities = new Map<string, string>()
+  sourceIdentities = new Map<string, string>()
+  private mountIds = new Map<string, number | null>()
   online = new Map<string, boolean>()
+  errors = new Map<string, string>()
   scanning = false
   constructor(
     public roots: RootConfig[],
-    public maxFileBytes: number
+    public maxFileBytes: number,
+    private verifySource?: (root: RootConfig) => SourceProof
   ) {}
-  restore(snapshot: {
-    records: FileRecord[]
-    roots: { id: string; path: string; identity: string }[]
-  }) {
+  restore(snapshot: { records: FileRecord[]; roots: IndexedRoot[] }) {
     for (const observed of snapshot.roots) {
       const root = this.roots.find((r) => r.id === observed.id)
       if (!root) continue
+      // Restored metadata stays offline. Explicit shared NAS mode rebuilds it
+      // only after proving the configured mount, preserving failed-scan caches.
       if (root.path !== observed.path || !/^\d+:\d+$/.test(observed.identity))
         throw new Error('root baseline requires administrator review')
+      if (this.verifySource && observed.sourceIdentity) {
+        if (!/^[a-f0-9]{64}:\d+$/.test(observed.sourceIdentity))
+          throw new Error('invalid persisted source identity')
+        this.sourceIdentities.set(root.id, observed.sourceIdentity)
+      }
       this.identities.set(root.id, observed.identity)
       this.online.set(root.id, false)
     }
@@ -60,12 +75,31 @@ export class FileIndex {
     try {
       for (const root of this.roots) {
         try {
+          const proof = this.verifySource?.(root)
           const raw = await jsonOperation(['scan', root.path])
-          if (typeof raw.identity !== 'string' || !Array.isArray(raw.entries))
+          if (
+            typeof raw.identity !== 'string' ||
+            !/^\d+:\d+$/.test(raw.identity) ||
+            !Array.isArray(raw.entries)
+          )
             throw new Error('schema')
           const prior = this.identities.get(root.id)
-          if (prior && prior !== raw.identity)
-            throw new Error('root replaced or mount lost')
+          const sourceIdentity = proof
+            ? proof.identity + ':' + raw.identity.split(':')[1]
+            : undefined
+          if (proof) {
+            const after = this.verifySource!(root)
+            if (
+              raw.mountId !== proof.mountId ||
+              after.mountId !== proof.mountId ||
+              after.identity !== proof.identity
+            )
+              throw new AppError('source-mount-changed', 503)
+            const baseline = this.sourceIdentities.get(root.id)
+            if (baseline && baseline !== sourceIdentity)
+              throw new AppError('source-identity-changed', 503)
+          } else if (prior && prior !== raw.identity)
+            throw new AppError('root-identity-changed', 503)
           const next = new Map<string, FileRecord>()
           next.set(fileId(root.id, ''), {
             id: fileId(root.id, ''),
@@ -107,9 +141,18 @@ export class FileIndex {
             if (record.rootId === root.id) this.records.delete(id)
           for (const [id, record] of next) this.records.set(id, record)
           this.identities.set(root.id, raw.identity)
+          if (proof && sourceIdentity) {
+            this.sourceIdentities.set(root.id, sourceIdentity)
+            this.mountIds.set(root.id, proof.mountId)
+          }
           this.online.set(root.id, true)
-        } catch {
+          this.errors.delete(root.id)
+        } catch (error) {
           this.online.set(root.id, false)
+          this.errors.set(
+            root.id,
+            error instanceof AppError ? error.code : 'source-scan-failed'
+          )
         } // Retain index on scan failure.
       }
     } finally {
@@ -127,6 +170,7 @@ export class FileIndex {
       !validRelative(record.relative)
     )
       throw new AppError('source-offline', 503)
+    this.checkSource(root)
     return [
       operation,
       root.path,
@@ -136,8 +180,29 @@ export class FileIndex {
       String(this.maxFileBytes)
     ]
   }
+  private checkSource(root: RootConfig) {
+    if (!this.verifySource) return
+    try {
+      const proof = this.verifySource(root)
+      if (
+        this.sourceIdentities.get(root.id) !==
+          proof.identity + ':' + this.identities.get(root.id)?.split(':')[1] ||
+        this.mountIds.get(root.id) !== proof.mountId
+      )
+        throw new AppError('source-mount-changed', 503)
+    } catch (error) {
+      this.online.set(root.id, false)
+      this.errors.set(
+        root.id,
+        error instanceof AppError ? error.code : 'source-mount-unavailable'
+      )
+      throw new AppError('source-offline', 503)
+    }
+  }
   async stat(record: FileRecord) {
-    return jsonOperation(this.args(record, 'stat'))
+    const result = await jsonOperation(this.args(record, 'stat'))
+    this.checkSource(this.roots.find((r) => r.id === record.rootId)!)
+    return result
   }
   async open(record: FileRecord, signal: AbortSignal) {
     signal.throwIfAborted()
@@ -179,6 +244,9 @@ export class FileIndex {
       }
       if (info.size !== record.size || info.revision !== record.revision)
         throw new AppError('source-changed', 409)
+      const root = this.roots.find((r) => r.id === record.rootId)!
+      this.checkSource(root)
+      const checkSource = () => this.checkSource(root)
       const cleanup = () => {
         signal.removeEventListener('abort', abort)
         abort()
@@ -193,6 +261,7 @@ export class FileIndex {
             yield part.value
           }
           await exit
+          checkSource()
         } finally {
           cleanup()
         }

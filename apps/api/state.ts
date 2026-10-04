@@ -25,6 +25,7 @@ export class State {
       CREATE TABLE IF NOT EXISTS oauth(state TEXT PRIMARY KEY,proof TEXT,nonce TEXT,verifier TEXT,expires INTEGER);
       CREATE TABLE IF NOT EXISTS metadata(id TEXT PRIMARY KEY,data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS root_identity(id TEXT PRIMARY KEY,path TEXT NOT NULL,identity TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS root_source_identity(id TEXT PRIMARY KEY,identity TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS audit(at INTEGER,principal TEXT,file TEXT,result TEXT);
     `)
   }
@@ -139,28 +140,45 @@ export class State {
       .all()
       .map((row) => JSON.parse(String(row.data)) as FileRecord)
     const roots = this.db
-      .prepare('SELECT id,path,identity FROM root_identity')
+      .prepare(
+        'SELECT r.id,r.path,r.identity,s.identity AS sourceIdentity FROM root_identity r LEFT JOIN root_source_identity s ON s.id=r.id'
+      )
       .all()
       .map((row) => ({
         id: String(row.id),
         path: String(row.path),
-        identity: String(row.identity)
+        identity: String(row.identity),
+        ...(row.sourceIdentity
+          ? { sourceIdentity: String(row.sourceIdentity) }
+          : {})
       }))
     return { records, roots }
   }
   saveIndex(
     records: Iterable<FileRecord>,
-    roots: Iterable<{ id: string; path: string; identity: string }>
+    roots: Iterable<{
+      id: string
+      path: string
+      identity: string
+      sourceIdentity?: string
+    }>
   ) {
     this.db.exec('BEGIN')
     try {
-      this.db.exec('DELETE FROM metadata; DELETE FROM root_identity')
+      this.db.exec(
+        'DELETE FROM metadata; DELETE FROM root_identity; DELETE FROM root_source_identity'
+      )
       const insert = this.db.prepare('INSERT INTO metadata VALUES(?,?)')
       for (const record of records)
         insert.run(record.id, JSON.stringify(record))
       const root = this.db.prepare('INSERT INTO root_identity VALUES(?,?,?)')
-      for (const record of roots)
+      const source = this.db.prepare(
+        'INSERT INTO root_source_identity VALUES(?,?)'
+      )
+      for (const record of roots) {
         root.run(record.id, record.path, record.identity)
+        if (record.sourceIdentity) source.run(record.id, record.sourceIdentity)
+      }
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')

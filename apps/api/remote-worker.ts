@@ -4,7 +4,11 @@ import { mkdir, rm, readFile, access } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { AppError } from '../../packages/contracts/index.ts'
 import type { Config } from './config.ts'
-import type { RemoteLease, RemoteWorker } from './remote-sessions.ts'
+import {
+  remoteErrorCode,
+  type RemoteLease,
+  type RemoteWorker
+} from './remote-sessions.ts'
 const execute = promisify(execFile)
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -113,10 +117,28 @@ export class LocalRemoteWorker implements RemoteWorker {
       child.stderr?.on('data', log)
       child.on('error', (e) => {
         this.failure = e
+        console.log(
+          JSON.stringify({
+            event: 'remote-process-error',
+            lease: lease.id,
+            component: command.split('/').pop(),
+            errorCode: remoteErrorCode(e, 'process-start-failed')
+          })
+        )
       })
       child.on('exit', (code, signal) => {
-        if (this.processes.includes(child))
+        if (this.processes.includes(child)) {
           this.failure = new Error(`remote process exited ${code ?? signal}`)
+          console.log(
+            JSON.stringify({
+              event: 'remote-process-exit',
+              lease: lease.id,
+              component: command.split('/').pop(),
+              code,
+              signal
+            })
+          )
+        }
       })
       return child
     }

@@ -26,6 +26,24 @@ export interface RemoteWorker {
   corePath: string
   alive?(): boolean
 }
+export type RemoteStopReason =
+  | 'requested'
+  | 'logout'
+  | 'shutdown'
+  | 'startup-failed'
+  | 'lease-expired'
+  | 'worker-exited'
+  | 'stream-disconnected'
+  | 'validation-failed'
+  | 'forced-vaapi-unverified'
+  | 'forced-vaapi-fallback'
+
+/** Log internal error codes only; exception messages may contain credentials/paths. */
+export function remoteErrorCode(error: unknown, fallback: string) {
+  return error instanceof AppError && /^[a-z][a-z0-9-]{0,63}$/.test(error.code)
+    ? error.code
+    : fallback
+}
 
 /** One exclusive display, with a new browser/profile/display/encoder per lease. */
 export class RemoteSessions {
@@ -49,6 +67,7 @@ export class RemoteSessions {
   }
   async create(owner: string, cookie: string, file: FileRecord) {
     if (this.active || this.closing) throw new AppError('remote-busy', 429)
+    const startedAt = this.now()
     const lease: RemoteLease = {
       id: token(),
       credential: token(),
@@ -70,9 +89,17 @@ export class RemoteSessions {
       lease.ready = true
       lease.expires = this.now() + 90000
       lease.disconnectedAt = this.now()
+      console.log(
+        JSON.stringify({
+          event: 'remote-session-ready',
+          lease: lease.id,
+          elapsedMs: this.now() - startedAt,
+          connectionGraceMs: 15000
+        })
+      )
       return lease
     } catch (error) {
-      await this.stop(lease.id)
+      await this.stop(lease.id, 'startup-failed', error)
       throw error
     }
   }
@@ -119,10 +146,25 @@ export class RemoteSessions {
     if (this.active === lease && this.connections.size === 0)
       lease.disconnectedAt = this.now()
   }
-  async stop(id?: string) {
+  async stop(
+    id?: string,
+    reason: RemoteStopReason = 'requested',
+    error?: unknown
+  ) {
     const lease = this.active
     if (id && lease?.id !== id) return
     if (!lease) return this.closing
+    console.log(
+      JSON.stringify({
+        event: 'remote-session-stop',
+        lease: lease.id,
+        reason,
+        errorCode:
+          error === undefined ? undefined : remoteErrorCode(error, reason),
+        ready: lease.ready,
+        connections: this.connections.size
+      })
+    )
     this.active = undefined
     lease.abort.abort()
     for (const close of this.connections) close()
@@ -135,23 +177,31 @@ export class RemoteSessions {
   private async check() {
     const lease = this.active
     if (!lease) return
+    let reason: RemoteStopReason = 'validation-failed'
     try {
-      if (lease.expires <= this.now()) throw new Error('expired')
-      if (lease.ready && this.worker.alive && !this.worker.alive())
-        throw new Error('worker-exited')
+      if (lease.expires <= this.now()) {
+        reason = 'lease-expired'
+        throw new Error(reason)
+      }
+      if (lease.ready && this.worker.alive && !this.worker.alive()) {
+        reason = 'worker-exited'
+        throw new Error(reason)
+      }
       if (
         lease.ready &&
         lease.disconnectedAt &&
         this.now() - lease.disconnectedAt > 15000
-      )
-        throw new Error('stream-disconnected')
+      ) {
+        reason = 'stream-disconnected'
+        throw new Error(reason)
+      }
       await this.validate(lease)
-    } catch {
-      await this.stop(lease.id)
+    } catch (error) {
+      await this.stop(lease.id, reason, error)
     }
   }
   close() {
     clearInterval(this.timer)
-    return this.stop()
+    return this.stop(undefined, 'shutdown')
   }
 }

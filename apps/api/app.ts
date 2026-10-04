@@ -6,7 +6,11 @@ import { Readable } from 'node:stream'
 import { parseScene, SceneCache } from './scene.ts'
 import { SCENE_TYPE } from '../../packages/transport/scene-wire.ts'
 import { ViewerRenderer } from './viewer.ts'
-import { RemoteSessions, type RemoteWorker } from './remote-sessions.ts'
+import {
+  RemoteSessions,
+  remoteErrorCode,
+  type RemoteWorker
+} from './remote-sessions.ts'
 import { LocalRemoteWorker } from './remote-worker.ts'
 import { assertRemoteMount } from './remote-mount.ts'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -53,9 +57,22 @@ export function createPortal(
       !['127.0.0.1', '::1'].includes(config.host))
   )
     throw new Error('Test OIDC keys are loopback development only')
+  const expectedSource = process.env.NAS_EXPECTED_SOURCE
+  const verifiedNas =
+    config.environment === 'production' &&
+    config.authorizationMode === 'google-mount' &&
+    (config.viewerMode === 'selkies' || Boolean(expectedSource))
   const app = new Hono(),
     state = new State(config.statePath),
-    index = options.index ?? new FileIndex(config.roots, config.maxFileBytes)
+    index =
+      options.index ??
+      new FileIndex(
+        config.roots,
+        config.maxFileBytes,
+        verifiedNas
+          ? () => assertRemoteMount(config.roots, expectedSource)
+          : undefined
+      )
   const scenes = new SceneCache()
   const viewer = new ViewerRenderer(config.webPath)
   let parsing = false
@@ -550,7 +567,8 @@ export function createPortal(
     if (c.req.header('X-CSRF-Token') !== session.csrf)
       throw new AppError('csrf-rejected', 403)
     state.revoke(session.id)
-    if (remote?.active?.owner === session.id) await remote.stop()
+    if (remote?.active?.owner === session.id)
+      await remote.stop(undefined, 'logout')
     deleteCookie(c, streamCookie, streamCookieOptions)
     deleteCookie(c, cookieName, cookieOptions)
     return c.json({ ok: true })
@@ -609,13 +627,35 @@ export function createPortal(
   })
   app.get('/stream/:id/*', async (c) => {
     if (!remote) throw new AppError('remote-disabled', 404)
-    const { session } = await identify(getCookie(c, cookieName), false)
-    const lease = await remote.access(
-      c.req.param('id'),
-      session.id,
-      getCookie(c, streamCookie)
-    )
+    const id = c.req.param('id')
+    let lease
+    try {
+      const { session } = await identify(getCookie(c, cookieName), false)
+      lease = await remote.access(id, session.id, getCookie(c, streamCookie))
+    } catch (error) {
+      console.log(
+        JSON.stringify({
+          event: 'remote-stream-http-rejected',
+          lease: /^[A-Za-z0-9_-]{43}$/.test(id) ? id : undefined,
+          errorCode: remoteErrorCode(error, 'request-failed')
+        })
+      )
+      throw error
+    }
     const suffix = c.req.path.slice(`/stream/${lease.id}/`.length)
+    console.log(
+      JSON.stringify({
+        event: 'remote-stream-http',
+        lease: lease.id,
+        asset: !suffix
+          ? 'page'
+          : suffix === 'selkies-core.js'
+            ? 'core'
+            : suffix === 'manifest.json'
+              ? 'manifest'
+              : 'unknown'
+      })
+    )
     c.header(
       'Content-Security-Policy',
       "default-src 'self'; script-src 'self' 'unsafe-eval'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
@@ -921,12 +961,42 @@ export function createPortal(
       return remote.access(id, session.id, credential)
     },
     async scan() {
+      const before = new Map(
+        config.roots.map((root) => [
+          root.id,
+          index.online.get(root.id) ? 'online' : index.errors.get(root.id)
+        ])
+      )
       await index.scan()
+      for (const root of config.roots) {
+        const status = index.online.get(root.id)
+          ? 'online'
+          : index.errors.get(root.id)
+        if (before.get(root.id) !== status)
+          console.log(
+            JSON.stringify({
+              event: 'source-index',
+              root: root.id,
+              status,
+              files: [...index.records.values()].filter(
+                (r) => r.rootId === root.id && r.kind === 'file'
+              ).length
+            })
+          )
+      }
       state.saveIndex(
         index.records.values(),
         config.roots.flatMap((root) => {
           const identity = index.identities.get(root.id)
-          return identity ? [{ ...root, identity }] : []
+          return identity
+            ? [
+                {
+                  ...root,
+                  identity,
+                  sourceIdentity: index.sourceIdentities.get(root.id)
+                }
+              ]
+            : []
         })
       )
     },

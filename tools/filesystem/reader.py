@@ -111,7 +111,7 @@ def main():
         rootstat=os.fstat(rootfd)
         identity=str(rootstat.st_dev)+':'+str(rootstat.st_ino)
         if sys.argv[1]=='scan':
-            print(json.dumps({'identity':identity,'entries':scan(rootfd,rootstat.st_dev)},separators=(',',':')))
+            print(json.dumps({'identity':identity,'mountId':mount_id(rootfd),'entries':scan(rootfd,rootstat.st_dev)},separators=(',',':')))
             return
         if len(sys.argv)!=7 or sys.argv[4]!=identity: raise ValueError('root changed')
         fd, before=safe_open(rootfd,sys.argv[3],rootstat.st_dev)

@@ -9,8 +9,10 @@ import { parseConfig } from '../../apps/api/config.ts'
 import { readFileSync } from 'node:fs'
 import {
   RemoteSessions,
+  remoteErrorCode,
   type RemoteLease
 } from '../../apps/api/remote-sessions.ts'
+import { AppError } from '../../packages/contracts/index.ts'
 const limits = {
   runtimePath: '/state/remote',
   appPort: 8085 as const,
@@ -99,7 +101,7 @@ test('Remote mount proof accepts operator-selected RO/RW and rejects empty/local
     assertRemoteMount(
       root,
       ':/approved-export',
-      '342 328 0:138 / /data/designs rw,relatime - nfs4 :/approved-export rw,vers=4.0\n'
+      '342 328 0:138 / /data/designs rw,relatime - nfs4 :/approved-export rw,vers=4.0,addr=10.0.1.1\n'
     )
   )
   for (const table of [
@@ -111,6 +113,43 @@ test('Remote mount proof accepts operator-selected RO/RW and rejects empty/local
   ])
     assert.throws(() => assertRemoteMount(root, '//nas/Designs', table))
   assert.throws(() => assertRemoteMount(root, undefined, entry))
+  assert.throws(() =>
+    assertRemoteMount(
+      root,
+      '//nas/Designs',
+      entry +
+        entry
+          .replace('30 29', '31 30')
+          .replace('//nas/Designs', '//other/Designs')
+    )
+  )
+})
+test('NAS durable proof survives device/mount-number changes but detects server/export/subtree changes', () => {
+  const root = [{ id: 'designs', label: 'test', path: '/data/designs' }]
+  const entry =
+    '342 328 0:138 / /data/designs rw,relatime - nfs4 :/volume1/Gd rw,vers=4.0,addr=10.0.1.1\n'
+  const before = assertRemoteMount(root, ':/volume1/Gd', entry)
+  const after = assertRemoteMount(
+    root,
+    ':/volume1/Gd',
+    entry
+      .replace('342 328 0:138', '400 399 0:200')
+      .replace('rw,relatime', 'ro,relatime')
+  )
+  assert.equal(before.identity, after.identity)
+  assert.notEqual(before.mountId, after.mountId)
+  for (const changed of [
+    entry.replace('10.0.1.1', '10.0.1.3'),
+    entry.replace(' / /data', ' /subtree /data')
+  ])
+    assert.notEqual(
+      assertRemoteMount(root, ':/volume1/Gd', changed).identity,
+      before.identity
+    )
+  assert.throws(() =>
+    assertRemoteMount(root, ':/volume1/Gd', entry.replace(',addr=10.0.1.1', ''))
+  )
+  assert.throws(() => assertRemoteMount(root, ':/volume1/Other', entry))
 })
 test('Session edits are explicitly Selkies-only; production DSM and raster cannot unlock', () => {
   const raw = JSON.parse(
@@ -206,6 +245,107 @@ test('Exclusive lease reserves before startup, never shares controls, aborts and
     await manager.stop()
     assert.equal(lease.abort.signal.aborted, true)
     assert.equal(stopped, 1)
+  } finally {
+    await manager.close()
+  }
+})
+
+test('Remote lifecycle distinguishes missing stream, expiry, worker failure and source rejection without logging secrets', async (t) => {
+  const logs: string[] = []
+  t.mock.method(console, 'log', (value: unknown) => logs.push(String(value)))
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  let now = 100,
+    alive = true,
+    rejected: Error | undefined,
+    startupError: Error | undefined,
+    stopped = 0
+  const worker = {
+    streamUrl: 'http://127.0.0.1:8086',
+    corePath: '/unused',
+    start: async () => {
+      if (startupError) throw startupError
+    },
+    stop: async () => {
+      stopped++
+    },
+    alive: () => alive
+  }
+  const manager = new RemoteSessions(
+    worker,
+    async () => {
+      if (rejected) throw rejected
+    },
+    () => now
+  )
+  const file = {
+    id: 'file',
+    rootId: 'designs',
+    relative: 'private-source.fig',
+    name: 'private-source.fig',
+    parentId: '',
+    kind: 'file' as const,
+    size: 1,
+    revision: '1'
+  }
+  const poll = async () => {
+    t.mock.timers.tick(1000)
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  const reports = () => logs.map((line) => JSON.parse(line))
+  try {
+    const lease = await manager.create('private-owner', 'private-cookie', file)
+    // No display client after readiness is different from a document failure.
+    now += 15001
+    await poll()
+    assert.equal(manager.active, undefined)
+    assert.equal(reports().at(-1).reason, 'stream-disconnected')
+    assert.equal(reports().at(-1).ready, true)
+    assert.equal(reports().at(-1).connections, 0)
+
+    await manager.create('private-owner', 'private-cookie', file)
+    now += 90001
+    await poll()
+    assert.equal(reports().at(-1).reason, 'lease-expired')
+
+    await manager.create('private-owner', 'private-cookie', file)
+    alive = false
+    await poll()
+    assert.equal(reports().at(-1).reason, 'worker-exited')
+    alive = true
+
+    await manager.create('private-owner', 'private-cookie', file)
+    rejected = new AppError('source-changed', 409)
+    await poll()
+    assert.equal(reports().at(-1).reason, 'validation-failed')
+    assert.equal(reports().at(-1).errorCode, 'source-changed')
+    rejected = undefined
+
+    startupError = new Error('private-cookie /secret/file.fig')
+    await assert.rejects(
+      manager.create('private-owner', 'private-cookie', file)
+    )
+    assert.equal(reports().at(-1).reason, 'startup-failed')
+    assert.equal(reports().at(-1).ready, false)
+    assert.equal(reports().at(-1).errorCode, 'startup-failed')
+    startupError = undefined
+
+    await manager.create('private-owner', 'private-cookie', file)
+    await manager.stop(undefined, 'logout')
+    assert.equal(reports().at(-1).reason, 'logout')
+    assert.equal(stopped, 6)
+    for (const secret of [
+      lease.cookie,
+      lease.ticket,
+      lease.credential,
+      file.name,
+      'private-owner',
+      '/secret/file.fig'
+    ])
+      assert.equal(logs.join('\n').includes(secret), false)
+    assert.equal(
+      remoteErrorCode(new AppError('/secret/file.fig'), 'unknown'),
+      'unknown'
+    )
   } finally {
     await manager.close()
   }

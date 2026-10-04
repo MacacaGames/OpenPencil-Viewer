@@ -15,6 +15,9 @@ import {
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { getEventListeners } from 'node:events'
+import { execFileSync } from 'node:child_process'
+import { AppError } from '../../packages/contracts/index.ts'
+import { State } from '../../apps/api/state.ts'
 const make = () => realpathSync(mkdtempSync(resolve(tmpdir(), 'safe-reader-')))
 test('reject traversal, encoded separators, links and non-fig directories; filenames are opaque API IDs', async () => {
   const dir = make()
@@ -117,6 +120,122 @@ test('growth while a descriptor is streaming aborts and never exceeds the indexe
     })
     assert.ok(received <= size)
   } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+test('verified NAS index rebuilds legacy metadata, survives changed device baseline and persists stable proof', async () => {
+  const dir = make()
+  const state = new State(dir + '/state.sqlite')
+  try {
+    writeFileSync(dir + '/one.fig', 'synthetic')
+    const roots = [{ id: 'test', label: 'test', path: dir }]
+    const raw = JSON.parse(
+      execFileSync('python3', ['tools/filesystem/reader.py', 'scan', dir], {
+        encoding: 'utf8'
+      })
+    )
+    const proof = { identity: 'a'.repeat(64), mountId: raw.mountId }
+    const legacy = new FileIndex(roots, 1024)
+    await legacy.scan()
+    const stale = {
+      records: [...legacy.records.values()],
+      roots: [{ id: 'test', path: dir, identity: '85:256' }]
+    }
+    state.saveIndex(stale.records, stale.roots)
+    state.db.prepare('INSERT INTO sessions VALUES(?,?)').run('preserved', '{}')
+    const index = new FileIndex(roots, 1024, () => proof)
+    index.restore(state.loadIndex())
+    assert.equal(index.online.get('test'), false) // Never serve an unverified cache.
+    await assert.rejects(
+      () =>
+        index.stat([...index.records.values()].find((r) => r.kind === 'file')!),
+      /source-offline/
+    )
+    await index.scan()
+    assert.equal(index.online.get('test'), true)
+    assert.equal(
+      [...index.records.values()].filter((r) => r.kind === 'file').length,
+      1
+    )
+    state.saveIndex(index.records.values(), [
+      {
+        id: 'test',
+        path: dir,
+        identity: index.identities.get('test')!,
+        sourceIdentity: index.sourceIdentities.get('test')
+      }
+    ])
+    const saved = state.loadIndex()
+    assert.equal(
+      saved.roots[0].sourceIdentity,
+      proof.identity + ':' + raw.identity.split(':')[1]
+    )
+    saved.roots[0].identity = '999999:' + raw.identity.split(':')[1]
+    const restart = new FileIndex(roots, 1024, () => proof)
+    restart.restore(saved)
+    assert.equal(restart.online.get('test'), false)
+    await restart.scan()
+    assert.equal(restart.online.get('test'), true)
+    assert.equal(restart.identities.get('test'), raw.identity)
+    assert.equal(
+      state.db.prepare('SELECT count(*) AS n FROM sessions').get()?.n,
+      1
+    )
+    const record = [...restart.records.values()].find((r) => r.kind === 'file')!
+    assert.equal((await restart.stat(record)).size, 9)
+    const bytes = await restart.open(record, new AbortController().signal)
+    let content = ''
+    for await (const chunk of bytes) content += chunk.toString()
+    assert.equal(content, 'synthetic')
+
+    proof.mountId = raw.mountId === null ? 123 : raw.mountId + 1
+    await assert.rejects(() => restart.stat(record), /source-offline/)
+    assert.equal(restart.online.get('test'), false)
+    await restart.scan()
+    assert.equal(restart.errors.get('test'), 'source-mount-changed')
+    assert.equal(restart.records.size, saved.records.length)
+    proof.mountId = raw.mountId
+    await restart.scan()
+    assert.equal(restart.online.get('test'), true)
+
+    proof.identity = 'b'.repeat(64)
+    await restart.scan()
+    assert.equal(restart.errors.get('test'), 'source-identity-changed')
+    assert.equal(restart.online.get('test'), false)
+    assert.equal(restart.records.size, saved.records.length)
+    proof.identity = 'a'.repeat(64)
+    await restart.scan()
+    assert.equal(restart.online.get('test'), true)
+
+    let observations = 0
+    const changing = new FileIndex(roots, 1024, () => ({
+      ...proof,
+      mountId: observations++ === 0 ? raw.mountId : (raw.mountId ?? 0) + 1
+    }))
+    changing.restore(saved)
+    await changing.scan()
+    assert.equal(changing.errors.get('test'), 'source-mount-changed')
+    assert.equal(changing.online.get('test'), false)
+    assert.equal(changing.records.size, saved.records.length)
+
+    const missing = new FileIndex(roots, 1024, () => {
+      throw new AppError('remote-nas-mount-unavailable', 503)
+    })
+    missing.restore(saved)
+    await missing.scan()
+    assert.equal(missing.online.get('test'), false)
+    assert.equal(missing.errors.get('test'), 'remote-nas-mount-unavailable')
+    await assert.rejects(
+      () => missing.open(record, new AbortController().signal),
+      /source-offline/
+    )
+    saved.roots[0].sourceIdentity = 'a'.repeat(64) + ':999999'
+    const replaced = new FileIndex(roots, 1024, () => proof)
+    replaced.restore(saved)
+    await replaced.scan()
+    assert.equal(replaced.errors.get('test'), 'source-identity-changed')
+  } finally {
+    state.close()
     rmSync(dir, { recursive: true, force: true })
   }
 })

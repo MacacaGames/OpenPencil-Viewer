@@ -62,7 +62,7 @@ flowchart LR
 
 1. 把 `deploy/selkies/` 放到獨立的部署目錄；保留原 raster 部署。複製 `env.example` 為 `.env`，`config.example.json` 為專用 config 目錄中的 `config.json`。改 `origin`、`allowedHostedDomains`，沿用既有 OAuth JSON；callback 為 `https://你的網域/auth/google/callback`。
 2. `.env` 填入 `PORTAL_CONFIG_DIR`、`GOOGLE_OAUTH_FILE`、`NAS_DESIGNS_PATH`、`LOCAL_STATE_PATH`。Unraid Compose 預設 `PORTAL_UID=99`／`PORTAL_GID=100`，可依需求設為10001:10001；state/profile 必須使用 Unraid 本機獨立儲存，既有資料需屬於選定 UID，config／OAuth／NAS 資料只需可讀。不要用 `chmod 777` 解決權限。
-3. `NAS_EXPECTED_SOURCE` 填入容器 `/proc/self/mountinfo` 顯示的實際來源，例如 `//NAS/approved-share` 或 `NAS:/approved-export`；不是 Unraid 本機 mountpoint。啟動要求 `/data/designs` 是精確掛載點、檔案系統為 `cifs`、`nfs` 或 `nfs4` 且來源完全相符；`ro`／`rw` 均可；每次建立／續期／存取串流及 watchdog 都會重新檢查。來源 inode、revision、可讀性另由既有安全 index 驗證。
+3. `NAS_EXPECTED_SOURCE` 填入容器 `/proc/self/mountinfo` 顯示的實際來源，例如 `//NAS/approved-share` 或 `NAS:/approved-export`；不是 Unraid 本機 mountpoint。啟動要求 `/data/designs` 是精確掛載點、檔案系統為 `cifs`、`nfs` 或 `nfs4` 且來源完全相符；`ro`／`rw` 均可；每次建立／續期／存取串流及 watchdog 都會重新檢查。來源 inode、revision、可讀性另由安全 index 驗證；NFS 必須可從 mountinfo 取得實際 `addr`，避免只有 `:/export` 時無法區分伺服器。
 4. 匯入映像並先用 CPU／軟體渲染跑通登入與會話：`.env` 設 `GPU_ENCODER_MODE=cpu`、`GPU_RENDER_MODE=software`，使用主 Compose。主 Compose 不需要 DRM device。若使用 `auto` 且未提供 GPU，日誌明確顯示 CPU／software。
 5. 反向代理參考 `nginx.example.conf`；TLS、Origin、WebSocket Upgrade、長連線 timeout 均需成立。範例只 listen 主機 `127.0.0.1:24681`，代理需在同主機可達此位址。若代理另在容器，操作員須設計專用網路／對應 listener，不能將內部端點一起公開。
 6. 開始 GPU 診斷，填入精確 PCI 地址、DRM group 數值 GID，再加入 GPU overlay。正式手動部署命令如下：
@@ -99,9 +99,19 @@ config 必須同時有 `viewerMode: "selkies"` 與完整 `remote` 物件，見 `
 python3 /app/tools/filesystem/reader.py scan /data/designs | python3 -c 'import json,sys; x=json.load(sys.stdin); print({"identity":x["identity"],"entries":len(x["entries"])})'
 ```
 
-成功後，再用 SQLite read-only connection 查看 `root_identity`，比對當前 `dev:inode`。舊來源改成 NFS、remount 或空本機 mountpoint 曾被索引，都可能造成 baseline 不符；程序會保留索引並拒絕讀取。先核對原始來源與實際掛載，再按下段採用本次獨立部署 state，不能刪除整份 SQLite、改以 root 執行或取消來源身份檢查來消除503。
+成功後，查看實際使用的 config 與索引；命令不讀 OAuth 或 FIG 內容：
 
-若操作員明確選擇全新的 Unraid `google-mount` 部署、無需舊 DSM／session／索引相容，可在核對指定NFS來源後改用新的本機 `statePath`，例如 `/state/unraid-google-mount.sqlite`，保留舊檔並重新Google登入。這是明確的新部署選擇；程序不會自行遇錯換state或忽略identity。Unraid共用瀏覽不查DSM users／directory，也不提供DSM個人ACL。既有dev:inode guard仍可能因後續NFS remount改變device number而拒絕服務；不能用一次新的state宣稱完成NAS重啟／重掛驗收。
+```sh
+python3 -c 'import os,json,sqlite3; c=json.load(open(os.environ.get("PORTAL_CONFIG","/config/config.json"))); d=sqlite3.connect("file:"+c["statePath"]+"?mode=ro",uri=True); print({"mode":c["mode"],"viewer":c.get("viewerMode","raster"),"statePath":c["statePath"],"expectedSource":os.environ.get("NAS_EXPECTED_SOURCE"),"baseline":d.execute("SELECT id,path,identity FROM root_identity").fetchall()}); d.close()'
+```
+
+操作員此次輸出仍為 `read-only`／`raster`、`/state/google-mount.sqlite`、expectedSource=None、baseline85:256；當前掃描為138:256。這表示原先 Selkies config 尚未替換到 Docker 實際掛載的 config source。請修改映射到 `/config/config.json` 的主機檔案，而不是只新增環境變數或將另一份未掛載的檔案改名。它需包含 `mode: "session-edit"`、`viewerMode: "selkies"`、完整 `remote` 物件與本機 statePath；GUI 新增環境變數 `NAS_EXPECTED_SOURCE=:/volume1/Gd`，套用重建容器。預期 `/auth/mode` 回傳 session-edit／selkies／google-mount，`/health/ready` 為 ready=true。
+
+新版在 production/google-mount 且明確設定 `NAS_EXPECTED_SOURCE` 時，以檔案系統、export、實際伺服器 addr、掛載子樹與來源 root inode 保存持久身份；NFS 每次掛載的 device／mount 編號只用於當次 descriptor 檢查。同一來源重掛後可重新掃描並更新 metadata/revision，不需要每次刪 SQLite。掃描前後都核對 mount，讀檔前後核對目前 mount，Linux scanner 回報實際 root descriptor 的 mount ID。來源消失、改成空本機目錄、換伺服器／export／root inode、掃描中改掛均拒絕；失敗保留離線索引，舊檔案 revision 的會話不能繼續讀取。`dsm-strict`、本機來源或沒有指定 expected source 的 raster 部署仍保留原數字身份防護。
+
+首次升級時，既有 metadata 不作授權來源；只有核對明確設定的 NAS 掛載並成功完整掃描後才重新發布索引，session／DSM bindings 不會因此刪除或遷移。新版日誌 `source-index` 顯示 root id、狀態與索引檔案數，不印 host path／文件名；例如 online、root-identity-changed、source-identity-changed、source-mount-changed、remote-nas-mount-unavailable、source-offline。這些狀態可區分未套用設定、來源變更與 reader 失敗。
+
+若操作員選擇本次全新的 Unraid `google-mount` 部署，可使用 `/state/unraid-google-mount.sqlite` 並重新 Google 登入，保留原 SQLite 檔；不需要遷移 DSM 身份。此選擇不代替持久 NAS 來源核對。NAS IP/export/root inode 的變更需要管理員確認並選擇新的部署 state，不能自行批准錯誤來源。真實 Unraid NFS 重掛／NAS 重啟／斷線仍需操作員驗收；本機 proof 模型測試不等於實機通過。
 
 ## Chromium sandbox 與主機相容性
 
@@ -118,6 +128,50 @@ docker run --rm --user 10001:10001 --cap-drop ALL \
 ```
 
 輸出的 namespace 內 UID 0 只表示成功建立隔離 namespace；容器主程序仍為 10001。舊 Docker/libseccomp 如無法解析 profile，應先與操作員核對相容版本並用匹配的官方 default profile 重產同樣四項例外，不能直接改 `seccomp=unconfined`。
+
+### Unraid GUI：No usable sandbox
+
+操作員此次已確認沒有 Extra Parameters；Chromium 日誌為 `No usable sandbox`。先套用交付的自訂 seccomp，再確認主機 namespace 能力。Docker 預設 profile 的 namespace 限制與 Chromium 啟動無 GPU 編碼是兩個獨立問題；設定 GPU 不會解除 sandbox 限制。
+
+1. 將本套件 `seccomp-chromium.json` 複製到 **Unraid 主機**的部署資料夾。Docker CLI 先讀這份檔案再建立容器；不是容器內 `/config/...` 路徑，也不只靠 volume 掛入即可套用。[Docker 官方說明](https://docs.docker.com/engine/security/seccomp/)
+2. 在 Unraid 編輯容器，切換 **Advanced View**，於 **Extra Parameters** 加入下列設定。把 `UNRAID_HOST_PROFILE_PATH` 整段換成你實際存放 JSON 的 Unraid 完整路徑；它是佔位符，不是環境變數：
+
+   ```text
+   --security-opt no-new-privileges:true --security-opt seccomp=UNRAID_HOST_PROFILE_PATH
+   ```
+
+   例如**你選擇把檔案放在** `/mnt/user/appdata/openpencil-viewer/seccomp-chromium.json` 時，第二個參數為 `--security-opt seccomp=/mnt/user/appdata/openpencil-viewer/seccomp-chromium.json`。這是建議的放置位置，不代表已確認你的主機有這個路徑。保持既有 non-root 身份與其他部署參數。
+3. 按 **Apply** 重新建立容器，讓建立時的 security options 生效，再開文件。在 Console 可先單獨執行下面一行測試：
+
+   ```sh
+   /usr/bin/unshare -Ur -n id
+   ```
+
+   成功時 namespace 內會顯示 uid=0；這是映射到容器原本 non-root UID 的隔離身份，沒有把 Portal 改為主機 root。若仍是 Operation not permitted，需要操作員回報實際 Docker SecurityOpt、user namespace sysctl／核心支援／LSM；不要修改主機核心參數或關閉 sandbox 來跳過驗證。
+
+本機相同固定 runtime、UID10001、readonly rootfs、cap-drop ALL、no-new-privileges、無網路／無資料掛載的兩次對照：Docker default profile 下 unshare 以 EPERM 失敗；交付 profile 下成功。這是 local native arm64 Docker Desktop 證據，Unraid amd64 是否通過需套用後回報。沒有新應用程式 build 要求，seccomp 是操作員建立容器時的設定。
+
+### 清理日誌與原始錯誤
+
+`Received SIGTERM`、openbox 的 X connection broken、Selkies 的 display connection closed/refused 可在會話清理時一起出現。程序啟動失敗、文件載入失敗／逾時、登入／来源驗證失敗、沒有串流連線超過寬限時間、登出或服務停止均可觸發清理，不能只依最後幾行判斷原因。`No display clients connected` 也不能單獨證明反向代理/WebSocket 失敗：原生畫面準備好之前，外部瀏覽器尚未取得串流 URL。
+
+操作員需提供本次開檔從 `remote-device-plan` 至 SIGTERM **之前**的日誌與網頁錯誤文字；保留第一個 Chromium／parse／document／stream 錯誤，排除 OAuth、Cookie、internal ticket 與 credentials。僅清理訊息不足以判定 sandbox 修正已生效或需要更换 GPU。
+
+### 已呈現畫面但沒有串流連線：Nginx Upgrade
+
+此次 Unraid 小檔案 software／CPU 對照有 `remote-presentation`、`ready:true`，NAS 讀檔約5.6ms、解析約300.4ms、原生載入約5904.2ms，其中首張呈現等待約5150.4ms。這確認此檔案的內部解析／呈現成功；並未驗證外部瀏覽器收到畫面。此時沒有 display client，接續 SIGTERM，不應將 DBus 訊息當成文件失敗原因。本機已成功解碼 H.264 的測試也有同樣 DBus 訊息。
+
+操作員提供的 Nginx 設定含 `proxy_set_header Connection keep-alive;`。WebSocket Upgrade 需要同時傳遞 `Upgrade` 與 `Connection: upgrade`，固定 keep-alive 會阻止握手。最小修正是將該行改為：
+
+```nginx
+proxy_set_header Connection "upgrade";
+```
+
+完整部署範例 `deploy/selkies/nginx.example.conf` 使用 `map`，讓一般 HTTP 與 WebSocket 分別設定 Connection；`map` 必須放在 `http` context，與 `server` 同層。現有部署保留後端 `http://10.0.1.9:3000` 與操作員的憑證路徑即可。另建議 `proxy_buffering off`、`proxy_read_timeout 180s`、`proxy_send_timeout 180s`。只代理 Portal 公開連接埠，內部8085／8086不對外開放。依 [Nginx 官方 WebSocket 文件](https://nginx.org/en/docs/http/websocket.html) 核對。
+
+在實際執行 Nginx 的主機／容器手動執行 `nginx -t`，成功後依原部署方式 reload。先保持 `GPU_RENDER_MODE=software`、`GPU_ENCODER_MODE=cpu`，重新開小檔案；瀏覽器 Network → WS 的 `/stream/…/api/websockets` 應為 **101**，伺服器應有 `remote-stream-info` 與 `remote-first-stream-packet`。外部畫面成功後再恢復渲染裝置 `auto`；R7沒有已驗證 H.264 encode entrypoint，CPU編碼仍需保留。
+
+新增診斷日誌將 `remote-session-ready`、`remote-stream-http`（page／core／manifest）、`remote-stream-attempt`、`remote-stream-connected`／`remote-stream-rejected`、`remote-stream-closed` 與 `remote-session-stop` 分開記錄。停止原因区分 startup-failed、stream-disconnected、lease-expired、worker-exited、validation-failed、logout／shutdown；原15秒沒有連線的寬限期不變。拒絕紀錄只含固定階段與內部錯誤碼，不記 Cookie、串流憑證、internal ticket、任意路徑或 exception message。新版應用日誌要在此次變更提交並經CI發布後才會出現；Nginx修正可先套用，不依赖新映像。
 
 ## R7 250 起步與 GPU 診斷
 

@@ -3,6 +3,7 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import type { Config } from './config.ts'
 import type { createPortal } from './app.ts'
 import { createRemoteInput } from './remote-protocol.ts'
+import { remoteErrorCode } from './remote-sessions.ts'
 
 export function attachRemoteStream(
   server: Server,
@@ -23,6 +24,8 @@ export function attachRemoteStream(
         )
     }
     let upstream: WebSocket | undefined
+    let leaseId: string | undefined,
+      stage = 'request'
     try {
       const url = new URL(request.url ?? '/', config.origin)
       const match = /^\/stream\/([A-Za-z0-9_-]{43})\/api\/websockets$/.exec(
@@ -30,6 +33,11 @@ export function attachRemoteStream(
       )
       if (!match || url.search || !portal.remote || !config.remote)
         return denied()
+      leaseId = match[1]
+      stage = 'authorization'
+      console.log(
+        JSON.stringify({ event: 'remote-stream-attempt', lease: leaseId })
+      )
       const cookies = Object.fromEntries(
         (request.headers.cookie ?? '').split(';').map((part) => {
           const index = part.indexOf('=')
@@ -53,6 +61,7 @@ export function attachRemoteStream(
         credential,
         request.headers.origin
       )
+      stage = 'upstream-connect'
       upstream = new WebSocket(
         portal.remote.worker.streamUrl.replace(/^http/, 'ws') +
           '/api/websockets',
@@ -84,6 +93,7 @@ export function attachRemoteStream(
         upstream!.once('open', resolve)
         upstream!.once('error', reject)
       })
+      stage = 'revalidation'
       await portal.remoteConnection(
         cookie,
         match[1],
@@ -93,12 +103,16 @@ export function attachRemoteStream(
       if (overflow || upstream.readyState !== WebSocket.OPEN)
         throw new Error('remote-stream-not-ready')
       const source = upstream
+      stage = 'upgrade'
       sockets.handleUpgrade(request, socket, head, (client) => {
+        console.log(
+          JSON.stringify({ event: 'remote-stream-connected', lease: lease.id })
+        )
         let hardwareVerified = lease.encoderMode !== 'vaapi'
         const verifyTimer = setTimeout(() => {
           if (!hardwareVerified) {
             console.error('remote-forced-vaapi-unverified')
-            void portal.remote?.stop(lease.id)
+            void portal.remote?.stop(lease.id, 'forced-vaapi-unverified')
           }
         }, 10000)
         verifyTimer.unref()
@@ -106,7 +120,19 @@ export function attachRemoteStream(
           lastStats = 0
         const connectedAt = performance.now()
         let firstPacket = false
-        const close = () => {
+        let closed = false
+        const close = (reason = 'session-stopped') => {
+          if (closed) return
+          closed = true
+          console.log(
+            JSON.stringify({
+              event: 'remote-stream-closed',
+              lease: lease.id,
+              reason,
+              firstPacket,
+              transferredBytes: transferred
+            })
+          )
           clearTimeout(verifyTimer)
           client.terminate()
           source.terminate()
@@ -149,8 +175,8 @@ export function attachRemoteStream(
                     !/vaapi/i.test(message.info.encoder ?? ''))
                 ) {
                   console.error('remote-forced-vaapi-fallback-rejected')
-                  void portal.remote?.stop(lease.id)
-                  return close()
+                  void portal.remote?.stop(lease.id, 'forced-vaapi-fallback')
+                  return close('forced-vaapi-fallback')
                 }
                 hardwareVerified = true
               }
@@ -184,20 +210,29 @@ export function attachRemoteStream(
             )
           }
           transferred += size(bytes)
-          if (client.bufferedAmount > 16 * 1024 * 1024) return close()
+          if (client.bufferedAmount > 16 * 1024 * 1024)
+            return close('browser-backpressure')
           client.send(bytes, { binary })
         }
         source.on('message', forward)
-        client.on('close', close)
-        client.on('error', close)
-        source.on('close', close)
-        source.on('error', close)
+        client.on('close', () => close('browser-closed'))
+        client.on('error', () => close('browser-error'))
+        source.on('close', () => close('upstream-closed'))
+        source.on('error', () => close('upstream-error'))
         source.off('message', buffer)
         for (const [data, binary] of pending) forward(data, binary)
         pending.length = 0
         source.send('_stats,1')
       })
-    } catch {
+    } catch (error) {
+      console.log(
+        JSON.stringify({
+          event: 'remote-stream-rejected',
+          lease: leaseId,
+          stage,
+          errorCode: remoteErrorCode(error, 'stream-handshake-failed')
+        })
+      )
       upstream?.terminate()
       denied()
     }
