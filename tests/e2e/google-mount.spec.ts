@@ -40,6 +40,29 @@ test('signed Google shared browse: both users see all files, nested navigation a
   await expect(page.getByTestId('shared-browse-profile')).toBeVisible()
   await page.getByRole('link', { name: 'Google Workspace 登入' }).click()
   await expect(page.getByText('a@fixture.example')).toBeVisible()
+  await expect(page.getByTestId('file-browser')).toHaveAttribute(
+    'data-view',
+    'cards'
+  )
+  const preview = page
+    .locator('button[data-file-id]')
+    .filter({ hasText: 'A.fig' })
+    .locator('img')
+  await expect(preview).toBeVisible()
+  await expect
+    .poll(() =>
+      preview.evaluate((image) => (image as HTMLImageElement).naturalWidth)
+    )
+    .toBe(64)
+  await page.screenshot({ path: '.work/cards-display-cards.png' })
+  await page.getByRole('button', { name: '列表', exact: true }).click()
+  await expect(page.getByTestId('file-browser')).toHaveAttribute(
+    'data-view',
+    'list'
+  )
+  await expect(page.locator('button[data-file-id] img')).toHaveCount(0)
+  await page.screenshot({ path: '.work/cards-display-list.png' })
+  await page.getByRole('button', { name: '卡片', exact: true }).click()
   for (const name of ['A.fig', 'B.fig'])
     await expect(page.getByRole('button', { name, exact: false })).toBeVisible()
   await page.getByRole('button', { name: 'nested', exact: false }).dblclick()

@@ -5,7 +5,7 @@ import { rmSync } from 'node:fs'
 import { createGoogleFixture } from '../helpers/google-mount-fixture.ts'
 const base = resolve('.work/google-mount-e2e')
 rmSync(base, { recursive: true, force: true })
-const fixture = await createGoogleFixture(base, 3213)
+const fixture = await createGoogleFixture(base, 3213, { withThumbnail: true })
 const server = serve({
   fetch: fixture.portal.app.fetch,
   hostname: '127.0.0.1',

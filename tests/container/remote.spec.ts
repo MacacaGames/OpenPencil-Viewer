@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { fixtureCode } from '../helpers/google-mount-fixture.ts'
 const origin = process.env.REMOTE_TEST_ORIGIN ?? 'http://127.0.0.1:24682'
+test.use({ deviceScaleFactor: 2 })
 test('real Linux Selkies H.264, resize, logout and source integrity (synthetic only)', async ({
   page
 }) => {
@@ -111,6 +112,9 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
     await (await page.request.get(origin + '/__fixture/status')).json()
   ).lease
   expect(rendered.width).toBeGreaterThan(64)
+  expect(rendered.width).toBeGreaterThan(1440)
+  expect(rendered.width).toBeLessThanOrEqual(1920)
+  expect(rendered.height).toBeLessThanOrEqual(1080)
   expect(packets.length).toBeGreaterThan(0)
   await page.screenshot({ path: '.work/selkies-ci/session-edit-stream.png' })
   const framesBefore = await video.evaluate(
@@ -158,7 +162,27 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
     .poll(() => video.evaluate((v) => (v as HTMLVideoElement).videoWidth), {
       timeout: 15000
     })
-    .toBeLessThanOrEqual(1100)
+    .not.toBe(rendered.width)
+  expect(
+    await video.evaluate((v) => (v as HTMLVideoElement).videoWidth)
+  ).toBeLessThanOrEqual(1920)
+  const beforeUi = await video.evaluate(
+    (v) => (v as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames
+  )
+  await page.getByRole('combobox', { name: '遠端文字大小' }).selectOption('1.5')
+  await expect
+    .poll(() =>
+      video.evaluate(
+        (v) =>
+          (v as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames
+      )
+    )
+    .toBeGreaterThan(beforeUi)
+  await page.getByRole('button', { name: '全螢幕', exact: true }).click()
+  await expect
+    .poll(() => page.evaluate(() => Boolean(document.fullscreenElement)))
+    .toBe(true)
+  await page.evaluate(() => document.exitFullscreen())
   console.log(
     JSON.stringify({
       host: 'local Docker test; not Unraid GPU acceptance',

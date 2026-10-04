@@ -52,6 +52,16 @@ await build({
   nodePaths: [editorRoot + '/node_modules']
 })
 await build({
+  entryPoints: [root + '/packages/upstream-adapter/server-thumbnail.ts'],
+  bundle: true,
+  platform: 'node',
+  target: 'node22',
+  format: 'esm',
+  outfile: outputRoot + '/api/thumbnail-extractor.js',
+  alias: { '@open-pencil/fig': editorRoot + '/packages/fig/dist/index.js' },
+  nodePaths: [editorRoot + '/node_modules']
+})
+await build({
   entryPoints: [root + '/packages/upstream-adapter/server-renderer.ts'],
   bundle: true,
   platform: 'node',

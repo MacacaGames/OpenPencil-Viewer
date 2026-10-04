@@ -128,6 +128,48 @@ test('Google remote: source stays internal, WS binds owner/Origin, logout destro
       streamCookie = response.headers.getSetCookie()[0].split(';')[0]
     assert.ok(active)
     const cookies = A.cookie + '; ' + streamCookie
+    const displayHeaders = {
+      ...headers,
+      Cookie: cookies,
+      'Content-Type': 'application/json'
+    }
+    const changed = await request(`/api/remote/${lease.id}/display`, {
+      method: 'POST',
+      headers: displayHeaders,
+      body: JSON.stringify({ width: 1200, height: 800, dpr: 2, uiScale: 1.5 })
+    })
+    assert.equal(changed.status, 200)
+    assert.deepEqual((await changed.json()).display.width, 1620)
+    assert.equal(
+      (
+        await request(`/api/remote/${lease.id}/display`, {
+          method: 'POST',
+          headers: displayHeaders,
+          body: JSON.stringify({
+            width: 1200,
+            height: 800,
+            dpr: 100,
+            uiScale: 1.5
+          })
+        })
+      ).status,
+      400
+    )
+    assert.equal(
+      (
+        await request(`/api/remote/${lease.id}/display`, {
+          method: 'POST',
+          headers: { ...displayHeaders, 'X-CSRF-Token': 'wrong' },
+          body: JSON.stringify({
+            width: 1200,
+            height: 800,
+            dpr: 2,
+            uiScale: 1.5
+          })
+        })
+      ).status,
+      403
+    )
     assert.equal(
       (
         await request(`/api/files/${id}/remote`, {
@@ -149,6 +191,20 @@ test('Google remote: source stays internal, WS binds owner/Origin, logout destro
     assert.equal(
       (await request(`/_remote/${active.ticket}/scene`, { headers })).status,
       404
+    )
+    assert.equal(
+      (await request(`/_remote/${active.ticket}/display`, { headers })).status,
+      404
+    )
+    assert.equal(
+      (
+        await (
+          await fixture.portal.internalApp.request(
+            `http://127.0.0.1/_remote/${active.ticket}/display`
+          )
+        ).json()
+      ).display.uiScale,
+      1.5
     )
     assert.equal(
       (

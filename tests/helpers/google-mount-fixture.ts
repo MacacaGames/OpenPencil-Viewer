@@ -6,6 +6,7 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { parseConfig } from '../../apps/api/config.ts'
 import { createPortal } from '../../apps/api/app.ts'
 import type { RemoteWorker } from '../../apps/api/remote-sessions.ts'
+import { thumbnailFig } from './thumbnail-fixture.ts'
 
 export function fixtureCode(
   url: URL,
@@ -33,6 +34,7 @@ export async function createGoogleFixture(
     mode?: 'read-only' | 'session-edit'
     sourceRoot?: string
     remoteWorker?: RemoteWorker
+    withThumbnail?: boolean
   } = {}
 ) {
   const source = resolve(base, 'source'),
@@ -41,6 +43,7 @@ export async function createGoogleFixture(
   mkdirSync(secondary, { recursive: true })
   for (const name of ['A.fig', 'B.fig'])
     copyFileSync('tests/fixtures/basic.fig', source + '/' + name)
+  if (options.withThumbnail) writeFileSync(source + '/A.fig', thumbnailFig())
   copyFileSync('tests/fixtures/basic.fig', source + '/nested/Nested.fig')
   copyFileSync('tests/fixtures/basic.fig', secondary + '/Second.fig')
   writeFileSync(source + '/ignored.txt', 'synthetic only')

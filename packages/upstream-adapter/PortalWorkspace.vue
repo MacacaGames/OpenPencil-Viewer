@@ -13,6 +13,7 @@ import { readDownload } from '../../portal/transport/download'
 import { MAX_SCENE_BYTES, SCENE_TYPE } from '../../portal/transport/scene-wire'
 import RasterViewer from '../../portal/upstream-adapter/RasterViewer.vue'
 import RemoteViewer from '../../portal/upstream-adapter/RemoteViewer.vue'
+import FilePreview from '../../portal/upstream-adapter/FilePreview.vue'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 import type { FileRecord } from '../../portal/contracts/index'
 import type { ViewerManifest } from '../../portal/contracts/viewer'
@@ -47,6 +48,17 @@ const me = ref<{
   next = ref<string | null>(null)
 const viewing = ref(location.pathname === '/editor'),
   abort = new AbortController()
+const fileView = ref<'cards' | 'list'>('cards')
+try {
+  if (localStorage.getItem('portal.fileView') === 'list')
+    fileView.value = 'list'
+} catch {}
+function setFileView(value: 'cards' | 'list') {
+  fileView.value = value
+  try {
+    localStorage.setItem('portal.fileView', value)
+  } catch {}
+}
 let disposed = false
 function dispose() {
   if (disposed) return
@@ -303,62 +315,124 @@ onUnmounted(() => {
       >
     </div>
     <template v-else-if="!viewing">
-      <div class="mx-auto flex w-full max-w-5xl flex-col gap-5 px-8 py-8">
-        <h1 class="text-xl font-semibold">設計文件</h1>
-        <form class="flex gap-3" @submit.prevent="browse()">
-          <select
-            v-model="parent"
-            aria-label="來源"
-            class="rounded border border-border bg-panel px-3"
-            @change="changeSource"
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <div class="mx-auto flex w-full max-w-6xl flex-col gap-5 px-6 py-8">
+          <div class="flex items-center justify-between gap-4">
+            <h1 class="text-xl font-semibold">設計文件</h1>
+            <div
+              role="group"
+              aria-label="檔案顯示方式"
+              class="flex rounded-lg border border-border p-1"
+            >
+              <button
+                v-for="option in ['cards', 'list'] as const"
+                :key="option"
+                :aria-pressed="fileView === option"
+                :class="[
+                  'rounded px-3 py-1.5 text-sm',
+                  fileView === option ? 'bg-hover text-surface' : 'text-muted'
+                ]"
+                @click="setFileView(option)"
+              >
+                {{ option === 'cards' ? '卡片' : '列表' }}
+              </button>
+            </div>
+          </div>
+          <form class="flex flex-wrap gap-3" @submit.prevent="browse()">
+            <select
+              v-model="parent"
+              aria-label="來源"
+              class="rounded border border-border bg-panel px-3"
+              @change="changeSource"
+            >
+              <option v-for="root in roots" :key="root.id" :value="root.id">
+                {{ root.name }}
+              </option>
+            </select>
+            <input
+              v-model="query"
+              aria-label="搜尋文件"
+              placeholder="搜尋文件名稱或路徑"
+              class="min-w-0 flex-1 rounded border border-border bg-panel px-3 py-2"
+            />
+            <button class="rounded border border-border px-4">搜尋</button>
+            <button
+              type="button"
+              class="rounded border border-border px-4"
+              @click="returnToSource"
+            >
+              回到來源
+            </button>
+          </form>
+          <p class="text-sm text-muted">
+            {{ total }} 項可見結果 · 雙擊開啟 · 原檔保留在 NAS
+          </p>
+          <div
+            :class="
+              fileView === 'cards'
+                ? 'portal-files-cards'
+                : 'flex flex-col gap-2'
+            "
+            data-test-id="file-browser"
+            :data-view="fileView"
           >
-            <option v-for="root in roots" :key="root.id" :value="root.id">
-              {{ root.name }}
-            </option>
-          </select>
-          <input
-            v-model="query"
-            aria-label="搜尋文件"
-            placeholder="搜尋文件名稱或路徑"
-            class="min-w-0 flex-1 rounded border border-border bg-panel px-3 py-2"
-          />
-          <button class="rounded border border-border px-4">搜尋</button>
+            <button
+              v-for="file in files"
+              :key="file.id + file.revision"
+              :data-file-id="file.id"
+              :aria-label="file.name"
+              :class="[
+                'overflow-hidden rounded-lg border border-border text-left hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent',
+                fileView === 'cards'
+                  ? 'flex flex-col'
+                  : 'flex items-center justify-between gap-4 px-4 py-3'
+              ]"
+              @dblclick="open(file)"
+              @keydown.enter="open(file)"
+            >
+              <FilePreview
+                v-if="fileView === 'cards'"
+                :id="file.id"
+                :revision="file.revision"
+                :folder="file.kind === 'folder'"
+                :enabled="authorization === 'google-mount'"
+              />
+              <div
+                :class="
+                  fileView === 'cards'
+                    ? 'flex w-full flex-col gap-1 px-4 py-3'
+                    : 'min-w-0 flex-1'
+                "
+              >
+                <span class="block truncate font-medium">{{ file.name }}</span>
+                <span class="block truncate text-xs text-muted">{{
+                  file.kind === 'folder' ? '資料夾' : '.fig 設計文件'
+                }}</span>
+              </div>
+              <span
+                :class="[
+                  'shrink-0 text-xs text-muted',
+                  fileView === 'cards' ? 'px-4 pb-3' : ''
+                ]"
+                >{{
+                  file.kind === 'file'
+                    ? `${(file.size / 1048576).toFixed(2)} MiB`
+                    : ''
+                }}</span
+              >
+            </button>
+          </div>
+          <p v-if="!files.length && !error" class="text-muted">
+            沒有可見文件。
+          </p>
           <button
-            type="button"
-            class="rounded border border-border px-4"
-            @click="returnToSource"
+            v-if="next"
+            class="rounded border border-border px-4 py-2"
+            @click="browse(next ?? '0', true)"
           >
-            回到來源
+            載入更多
           </button>
-        </form>
-        <p class="text-sm text-muted">
-          {{ total }} 項可見結果 · 雙擊開啟 · 原檔保留在 NAS
-        </p>
-        <button
-          v-for="file in files"
-          :key="file.id"
-          :data-file-id="file.id"
-          class="flex items-center justify-between rounded border border-border px-4 py-4 text-left hover:bg-hover"
-          @dblclick="open(file)"
-          @keydown.enter="open(file)"
-        >
-          <span
-            >{{ file.kind === 'folder' ? '資料夾 · ' : ''
-            }}{{ file.name }}</span
-          ><span class="text-xs text-muted">{{
-            file.kind === 'file'
-              ? `${(file.size / 1048576).toFixed(2)} MiB`
-              : ''
-          }}</span>
-        </button>
-        <p v-if="!files.length && !error" class="text-muted">沒有可見文件。</p>
-        <button
-          v-if="next"
-          class="rounded border border-border px-4 py-2"
-          @click="browse(next ?? '0', true)"
-        >
-          載入更多
-        </button>
+        </div>
       </div>
     </template>
     <template v-else>
@@ -394,3 +468,10 @@ onUnmounted(() => {
     />
   </div>
 </template>
+<style scoped>
+.portal-files-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+  gap: 1rem;
+}
+</style>

@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { AppError, type FileRecord } from '../../packages/contracts/index.ts'
+import type { RemoteDisplay } from '../../packages/contracts/remote-display.ts'
 
 const token = () => randomBytes(32).toString('base64url')
 export function secretEqual(a: string | undefined, b: string) {
@@ -18,6 +19,7 @@ export interface RemoteLease {
   abort: AbortController
   disconnectedAt: number
   encoderMode?: string
+  display?: RemoteDisplay
 }
 export interface RemoteWorker {
   start(lease: RemoteLease): Promise<void>
@@ -65,7 +67,12 @@ export class RemoteSessions {
     )
     this.timer.unref()
   }
-  async create(owner: string, cookie: string, file: FileRecord) {
+  async create(
+    owner: string,
+    cookie: string,
+    file: FileRecord,
+    display?: RemoteDisplay
+  ) {
     if (this.active || this.closing) throw new AppError('remote-busy', 429)
     const startedAt = this.now()
     const lease: RemoteLease = {
@@ -78,7 +85,8 @@ export class RemoteSessions {
       expires: this.now() + 180000,
       ready: false,
       abort: new AbortController(),
-      disconnectedAt: 0
+      disconnectedAt: 0,
+      display
     }
     this.active = lease // Reserve before awaiting any process or parsing.
     try {

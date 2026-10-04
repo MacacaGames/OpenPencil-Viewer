@@ -10,7 +10,8 @@ import {
   linkSync,
   rmSync,
   renameSync,
-  appendFileSync
+  appendFileSync,
+  truncateSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
@@ -19,6 +20,46 @@ import { execFileSync } from 'node:child_process'
 import { AppError } from '../../packages/contracts/index.ts'
 import { State } from '../../apps/api/state.ts'
 const make = () => realpathSync(mkdtempSync(resolve(tmpdir(), 'safe-reader-')))
+test('bounded range reads seek within large FIGs and retain revision/link/confinement checks', async () => {
+  const dir = make()
+  try {
+    writeFileSync(dir + '/large.fig', 'prefix')
+    truncateSync(dir + '/large.fig', 200 * 1024 * 1024)
+    const index = new FileIndex(
+      [{ id: 'test', label: 'test', path: dir }],
+      256 * 1024 * 1024
+    )
+    await index.scan()
+    const record = [...index.records.values()].find((r) => r.kind === 'file')!
+    const signal = new AbortController().signal
+    assert.equal(
+      (await index.readRange(record, 0, 6, signal)).toString(),
+      'prefix'
+    )
+    assert.equal(
+      (await index.readRange(record, record.size - 64, record.size, signal))
+        .length,
+      64
+    )
+    for (const [start, end] of [
+      [-1, 4],
+      [0, record.size + 1],
+      [0, 5 * 1024 * 1024],
+      [2, 1]
+    ])
+      await assert.rejects(
+        () => index.readRange(record, start, end, signal),
+        /invalid-range/
+      )
+    appendFileSync(dir + '/large.fig', 'changed')
+    await assert.rejects(
+      () => index.readRange(record, 0, 6, signal),
+      /source-changed/
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 test('reject traversal, encoded separators, links and non-fig directories; filenames are opaque API IDs', async () => {
   const dir = make()
   try {

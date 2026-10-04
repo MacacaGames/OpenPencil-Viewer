@@ -159,7 +159,7 @@ export class FileIndex {
       this.scanning = false
     }
   }
-  args(record: FileRecord, operation: 'read' | 'stat') {
+  args(record: FileRecord, operation: 'read' | 'stat' | 'range') {
     const root = this.roots.find((r) => r.id === record.rootId),
       identity = this.identities.get(record.rootId)
     if (
@@ -204,11 +204,46 @@ export class FileIndex {
     this.checkSource(this.roots.find((r) => r.id === record.rootId)!)
     return result
   }
-  async open(record: FileRecord, signal: AbortSignal) {
+  async readRange(
+    record: FileRecord,
+    start: number,
+    end: number,
+    signal: AbortSignal
+  ) {
+    const stream = await this.open(record, signal, { start, end })
+    const chunks: Buffer[] = []
+    let bytes = 0
+    for await (const chunk of stream) {
+      bytes += chunk.length
+      if (bytes > end - start) throw new AppError('source-changed', 409)
+      chunks.push(Buffer.from(chunk))
+    }
+    if (bytes !== end - start) throw new AppError('source-changed', 409)
+    return Buffer.concat(chunks)
+  }
+  async open(
+    record: FileRecord,
+    signal: AbortSignal,
+    range?: { start: number; end: number }
+  ) {
     signal.throwIfAborted()
+    if (
+      range &&
+      (!Number.isSafeInteger(range.start) ||
+        !Number.isSafeInteger(range.end) ||
+        range.start < 0 ||
+        range.end < range.start ||
+        range.end > record.size ||
+        range.end - range.start > 4 * 1024 * 1024)
+    )
+      throw new AppError('invalid-range', 400)
     const child = spawn(
       process.env.PYTHON_BIN ?? 'python3',
-      [script, ...this.args(record, 'read')],
+      [
+        script,
+        ...this.args(record, range ? 'range' : 'read'),
+        ...(range ? [String(range.start), String(range.end)] : [])
+      ],
       { stdio: ['ignore', 'pipe', 'ignore'] }
     )
     const abort = () => child.kill('SIGTERM')

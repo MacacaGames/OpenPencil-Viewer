@@ -12,6 +12,10 @@ import {
   type RemoteWorker
 } from './remote-sessions.ts'
 import { LocalRemoteWorker } from './remote-worker.ts'
+import { ThumbnailCache } from './thumbnails.ts'
+import { remoteDisplay } from '../../packages/contracts/remote-display.ts'
+import { pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
 import { assertRemoteMount } from './remote-mount.ts'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { parseViewport } from '../../packages/contracts/viewer.ts'
@@ -75,6 +79,7 @@ export function createPortal(
       )
   const scenes = new SceneCache()
   const viewer = new ViewerRenderer(config.webPath)
+  const thumbnails = new ThumbnailCache()
   let parsing = false
   try {
     if (!options.index) index.restore(state.loadIndex())
@@ -317,8 +322,14 @@ export function createPortal(
     return c.json({
       name: lease.file.name,
       revision: lease.file.revision,
-      mode: config.mode
+      mode: config.mode,
+      display: lease.display
     })
+  })
+  internalApp.get('/_remote/:ticket/display', async (c) => {
+    const lease = await remote?.internal(c.req.param('ticket'))
+    if (!lease) throw new AppError('not-found', 404)
+    return c.json({ display: lease.display })
   })
   internalApp.get('/_remote/:ticket/scene', async (c) => {
     const lease = await remote?.internal(c.req.param('ticket'))
@@ -584,7 +595,13 @@ export function createPortal(
       maxFileBytes: config.maxFileBytes
     })
   })
-  app.post('/api/files/:id/remote', async (c) => {
+  const displayBody = bodyLimit({
+    maxSize: 2048,
+    onError: () => {
+      throw new AppError('invalid-display', 413)
+    }
+  })
+  app.post('/api/files/:id/remote', displayBody, async (c) => {
     if (!remote) throw new AppError('remote-disabled', 404)
     requireOrigin(c.req.header('Origin'))
     const cookie = getCookie(c, cookieName)
@@ -594,15 +611,27 @@ export function createPortal(
     const record = await authorize(principal, c.req.param('id'))
     if (record.kind !== 'file') throw new AppError('not-found', 404)
     await index.stat(record)
-    const lease = await remote.create(session.id, cookie!, record)
+    let display
+    try {
+      display = remoteDisplay(
+        c.req.header('Content-Type')?.includes('application/json')
+          ? await c.req.json()
+          : { width: 1920, height: 1080, dpr: 1, uiScale: 1.25 },
+        config.remote!
+      )
+    } catch {
+      throw new AppError('invalid-display', 400)
+    }
+    const lease = await remote.create(session.id, cookie!, record, display)
     setCookie(c, streamCookie, lease.credential, streamCookieOptions)
     return c.json({
       id: lease.id,
       url: `/stream/${lease.id}/`,
-      expires: lease.expires
+      expires: lease.expires,
+      display: lease.display
     })
   })
-  app.post('/api/remote/:id/:action', async (c) => {
+  app.post('/api/remote/:id/:action', displayBody, async (c) => {
     if (!remote) throw new AppError('remote-disabled', 404)
     requireOrigin(c.req.header('Origin'))
     const { session } = await identify(getCookie(c, cookieName), false)
@@ -613,6 +642,14 @@ export function createPortal(
       session.id,
       getCookie(c, streamCookie)
     )
+    if (c.req.param('action') === 'display') {
+      try {
+        lease.display = remoteDisplay(await c.req.json(), config.remote!)
+      } catch {
+        throw new AppError('invalid-display', 400)
+      }
+      return c.json({ display: lease.display })
+    }
     if (c.req.param('action') === 'renew') {
       remote.renew(lease)
       setCookie(c, streamCookie, lease.credential, streamCookieOptions)
@@ -737,9 +774,56 @@ export function createPortal(
     return c.json(record)
   })
   app.get('/api/files/:id/thumbnail', async (c) => {
-    const { principal } = await identify(getCookie(c, cookieName))
-    await authorize(principal, c.req.param('id'))
-    throw new AppError('thumbnail-unavailable', 404)
+    const cookie = getCookie(c, cookieName)
+    const { principal } = await identify(cookie)
+    const record = await authorize(principal, c.req.param('id'))
+    if (
+      !sharedBrowse ||
+      record.kind !== 'file' ||
+      bridge ||
+      authz.open ||
+      authz.stat
+    )
+      throw new AppError('thumbnail-unavailable', 404)
+    if (c.req.query('revision') !== record.revision)
+      throw new AppError('source-changed', 409)
+    await index.stat(record) // Never let a shared cache bypass current source/access proof.
+    const signal = AbortSignal.any([
+      c.req.raw.signal,
+      AbortSignal.timeout(30000)
+    ])
+    const key =
+      config.roots.find((root) => root.id === record.rootId)!.path +
+      '\0' +
+      record.id +
+      '\0' +
+      record.revision
+    const image = await thumbnails.get(key, async () => {
+      const extractor = await import(
+        pathToFileURL(resolve(config.webPath, '../api/thumbnail-extractor.js'))
+          .href
+      )
+      let readBytes = 0
+      return extractor.extractThumbnail({
+        size: record.size,
+        read: async (start: number, end: number) => {
+          readBytes += end - start
+          if (readBytes > 8 * 1024 * 1024)
+            throw new AppError('thumbnail-unavailable', 404)
+          return index.readRange(record, start, end, signal)
+        }
+      }) as Promise<Uint8Array | null>
+    })
+    const current = await identify(cookie, false)
+    const after = await authorize(current.principal, record.id)
+    if (after.revision !== record.revision)
+      throw new AppError('source-changed', 409)
+    await index.stat(record)
+    if (!image) throw new AppError('thumbnail-unavailable', 404)
+    return c.body(image, 200, {
+      'Content-Type': 'image/png',
+      'X-Document-Revision': record.revision
+    })
   })
   for (const endpoint of ['viewer', 'viewport'])
     app.get('/api/files/:id/' + endpoint, async (c) => {
@@ -1002,6 +1086,7 @@ export function createPortal(
     },
     close() {
       void remote?.close()
+      void thumbnails.close()
       viewer.close()
       state.close()
     }

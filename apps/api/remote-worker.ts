@@ -146,7 +146,7 @@ export class LocalRemoteWorker implements RemoteWorker {
       ':1',
       '-screen',
       '0',
-      '1920x1080x24',
+      `${lease.display?.width ?? 1920}x${lease.display?.height ?? 1080}x24`,
       '-dpi',
       '96',
       '-nolisten',
@@ -246,6 +246,11 @@ export class LocalRemoteWorker implements RemoteWorker {
       '--disable-features=MediaRouter',
       '--disable-breakpad',
       '--password-store=basic',
+      '--force-device-scale-factor=' +
+        Math.max(
+          0.25,
+          (lease.display?.density ?? 1) * (lease.display?.uiScale ?? 1.25)
+        ),
       '--use-gl=angle',
       '--use-angle=gl',
       '--ignore-gpu-blocklist',

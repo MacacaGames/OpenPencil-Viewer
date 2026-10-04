@@ -7,6 +7,7 @@ import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 import { loadScene } from './editor'
 import { readDownload } from '../transport/download'
 import { MAX_SCENE_BYTES, SCENE_TYPE } from '../transport/scene-wire'
+import type { RemoteDisplay } from '../contracts/remote-display'
 const editor = createTab().store
 useKeyboard()
 const progress = ref('伺服器載入文件'),
@@ -17,6 +18,35 @@ const ticket = new URLSearchParams(location.search).get('ticket') ?? ''
 const path = '/_remote/' + encodeURIComponent(ticket)
 const begin = performance.now()
 const timings: Record<string, number> = {}
+let display: RemoteDisplay | undefined,
+  displayTimer: ReturnType<typeof setInterval> | undefined,
+  appliedFontSize = 0
+function applyDisplay() {
+  if (!display) return
+  const dpr = window.devicePixelRatio || 1
+  // Size rem-based UI in client CSS pixels; CanvasKit still renders its native DPR.
+  const density = Math.min(
+    (innerWidth * dpr) / display.cssWidth,
+    (innerHeight * dpr) / display.cssHeight
+  )
+  const fontSize = (16 * density * display.uiScale) / dpr
+  if (Math.abs(fontSize - appliedFontSize) < 0.01) return
+  appliedFontSize = fontSize
+  document.documentElement.style.fontSize = `${fontSize}px`
+  document.body.style.fontSize = `${(13 * fontSize) / 16}px`
+  editor.requestRender()
+}
+async function syncDisplay() {
+  try {
+    const response = await fetch(path + '/display', {
+      signal: abort.signal,
+      cache: 'no-store'
+    })
+    if (!response.ok) return
+    display = (await response.json()).display
+    applyDisplay()
+  } catch {}
+}
 onMounted(async () => {
   try {
     if (!/^[A-Za-z0-9_-]{43}$/.test(ticket)) throw new Error('內部會話無效')
@@ -25,8 +55,16 @@ onMounted(async () => {
       cache: 'no-store'
     })
     if (!metadataResponse.ok) throw new Error('內部會話已結束')
-    const metadata: { name: string; revision: string; mode: string } =
-      await metadataResponse.json()
+    const metadata: {
+      name: string
+      revision: string
+      mode: string
+      display?: RemoteDisplay
+    } = await metadataResponse.json()
+    display = metadata.display
+    applyDisplay()
+    window.addEventListener('resize', applyDisplay)
+    displayTimer = setInterval(() => void syncDisplay(), 1000)
     editable.value = metadata.mode === 'session-edit'
     const response = await fetch(path + '/scene', {
       signal: abort.signal,
@@ -79,6 +117,10 @@ onMounted(async () => {
   }
 })
 onUnmounted(() => {
+  clearInterval(displayTimer)
+  window.removeEventListener('resize', applyDisplay)
+  document.documentElement.style.fontSize = ''
+  document.body.style.fontSize = ''
   abort.abort()
   editor.dispose()
 })

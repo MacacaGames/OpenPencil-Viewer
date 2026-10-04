@@ -40,6 +40,10 @@ test('Remote browser receives no graph; private native session edits remain in m
   await page.getByRole('button', { name: /^A.fig/ }).dblclick()
   const iframe = page.frameLocator('iframe[title="OpenPencil 遠端畫面"]')
   await expect(iframe.locator('#synthetic-stream')).toBeVisible()
+  await expect(
+    page.getByRole('combobox', { name: '遠端文字大小' })
+  ).toHaveValue('1.25')
+  await page.getByRole('combobox', { name: '遠端文字大小' }).selectOption('1.5')
   await expect(page.locator('canvas')).toHaveCount(0)
   expect(requests.some((url) => /\/(scene|content)(?:\?|$)/.test(url))).toBe(
     false
@@ -60,6 +64,19 @@ test('Remote browser receives no graph; private native session edits remain in m
   )
   await expect(native.locator('canvas').first()).toBeVisible()
   await expect(native.getByRole('status')).toHaveCount(0, { timeout: 60000 })
+  const initialFont = await native.evaluate(() =>
+    parseFloat(getComputedStyle(document.documentElement).fontSize)
+  )
+  await page
+    .getByRole('combobox', { name: '遠端文字大小' })
+    .selectOption('1.75')
+  await expect
+    .poll(() =>
+      native.evaluate(() =>
+        parseFloat(getComputedStyle(document.documentElement).fontSize)
+      )
+    )
+    .toBeGreaterThan(initialFont)
   expect(
     await native.evaluate(() => Reflect.get(globalThis, '__portalMemoryIDB'))
   ).toBe(true)

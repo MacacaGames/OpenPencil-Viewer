@@ -212,7 +212,19 @@ GPU 主要影響 Chromium render、capture、encode；NAS 讀檔、FIG 解壓／
 
 ## 解析度、畫質與效能紀錄
 
-基準單會話、H.264、30fps、1920×1080／2,073,600 pixels、DPI上限192。使用 Selkies2.0的自動遠端 resize，`use_css_scaling=false`，傳送範圍受 Portal 驗證。全螢幕會重算遠端尺寸並重新排版。超過上限時以等比例限制像素；上限會限制高DPI文字細節，若要1440p／4K需在 config同步增加maxWidth/maxHeight/maxPixels并先測資源。
+基準單會話、H.264、30fps、1920×1080／2,073,600 pixels、DPI上限192。Portal 依串流區域實際寬高和瀏覽器 devicePixelRatio 決定遠端解析度，透過固定 Selkies2.0 的尺寸訊息更新，`use_css_scaling=false`。視窗變更與全螢幕會重算遠端尺寸、重新排版與渲染，無須重新解析 FIG。超過上限時以等比例限制像素；上限會限制高DPI文字細節，若要1440p／4K需在 config同步增加maxWidth/maxHeight/maxPixels并先測資源。
+
+遠端工具列提供「文字大小」100%、125%、150%、175%，預設125%，以及「符合視窗」與「全螢幕」。此比例調整原生介面字體／版面，不改變文件的畫布縮放值，也不以 CSS transform 長期拉伸桌面。初始 Chromium device scale 與後續原生介面字體同步由 adapter 處理；文字大小與檔案顯示模式只在使用者瀏覽器保存偏好。不同瀏覽器仍需手動確認文字清晰度與輸入位置，尤其受1080p像素上限限制的 Retina／4K 螢幕。
+
+## 文件卡片、列表與暫存縮圖
+
+文件列表可切換「卡片」與「列表」。Google-mount 卡片優先顯示 FIG 內建的 `thumbnail.png`，以受限 range 讀取取得 ZIP 目錄與縮圖，不下載或解析整份文件。缺少縮圖、預覽超過2MiB／2048×2048、或不支援的舊格式時使用圖示；不為列表啟動 Chromium 或完整 scene 解析。列表模式不請求縮圖，可用於快速瀏覽大量文件。
+
+縮圖放在容器私有 `/tmp/openpencil-thumbnails-*`，跨登入帳號共用，最多128MiB／512項，LRU淘汰，成功快取30分鐘、無預覽結果5分鐘。最多2個擷取工作／32個等待項目；單份文件累計 range 讀取上限8MiB。容器清理或重建後重新產生；不另掛載 cache volume，也不寫入 NAS 或 SQLite 目錄。請為既有 `/tmp` tmpfs 預留這部分空間。
+
+快取不省略授權：每次圖片請求仍檢查登入、目前來源與 revision，回應 `Cache-Control: no-store`，撤銷登入或掛載失效時拒絕提供快取。這不是整個 scene／FIG 的瀏覽器下載；卡片只取得有上限的 PNG 預覽。`dsm-strict` 未啟用這條共用縮圖路徑。
+
+## 串流品質與量測
 
 初期鎖定 `video_fullcolor=false`，避免 AMD H.264 全色彩模式要求4:4:4後退回CPU；启用 Selkies現有 paint-over 靜態品質改善。保留官方增量H.264／壓縮、背壓及 frame ACK，並非每次縮放下載新FIG／完整PNG。H.264文字細邊和顏色仍需實際評估；不承諾低位元率與無損文字可同時成立。只有WebSocket傳輸，這版沒有WebRTC/TURN/HEVC。
 

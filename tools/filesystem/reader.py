@@ -105,7 +105,7 @@ def scan(fd, dev, relative='', depth=0, result=None, counter=None, mount=None):
     return result
 
 def main():
-    if len(sys.argv) < 3 or sys.argv[1] not in ('scan','read','stat'): raise ValueError('operation')
+    if len(sys.argv) < 3 or sys.argv[1] not in ('scan','read','stat','range'): raise ValueError('operation')
     rootfd=root_open(sys.argv[2])
     try:
         rootstat=os.fstat(rootfd)
@@ -113,12 +113,24 @@ def main():
         if sys.argv[1]=='scan':
             print(json.dumps({'identity':identity,'mountId':mount_id(rootfd),'entries':scan(rootfd,rootstat.st_dev)},separators=(',',':')))
             return
-        if len(sys.argv)!=7 or sys.argv[4]!=identity: raise ValueError('root changed')
+        if len(sys.argv)!=(9 if sys.argv[1]=='range' else 7) or sys.argv[4]!=identity: raise ValueError('root changed')
         fd, before=safe_open(rootfd,sys.argv[3],rootstat.st_dev)
         try:
             if revision(before)!=sys.argv[5] or before.st_size>int(sys.argv[6]): raise ValueError('revision or size')
             print(json.dumps({'size':before.st_size,'revision':revision(before)},separators=(',',':')),flush=True)
             if sys.argv[1]=='stat': return
+            if sys.argv[1]=='range':
+                start,end=int(sys.argv[7]),int(sys.argv[8])
+                if not 0<=start<=end<=before.st_size or end-start>4*1024*1024: raise ValueError('range')
+                os.lseek(fd,start,os.SEEK_SET)
+                result=bytearray()
+                while len(result)<end-start:
+                    block=os.read(fd,min(65536,end-start-len(result)))
+                    if not block: raise ValueError('short range')
+                    result.extend(block)
+                if revision(os.fstat(fd))!=revision(before): raise ValueError('source changed')
+                sys.stdout.buffer.write(result); sys.stdout.buffer.flush()
+                return
             # Hold the final block until a same-descriptor before/after check passes.
             pending=os.read(fd,min(65536,before.st_size+1))
             received=len(pending)
