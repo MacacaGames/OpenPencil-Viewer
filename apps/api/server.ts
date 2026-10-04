@@ -4,6 +4,9 @@ import { mkdirSync, writeFileSync, existsSync, copyFileSync } from 'node:fs'
 import { parseConfig } from './config.ts'
 import { loadRuntimeConfig } from './runtime-config.ts'
 import { createPortal } from './app.ts'
+import { attachRemoteStream } from './remote-stream.ts'
+import type { Server } from 'node:http'
+import { assertRemoteMount } from './remote-mount.ts'
 export function mockConfig() {
   const base = resolve(process.env.MOCK_ROOT ?? '.work/mock-nas'),
     statePath = resolve(process.env.STATE_PATH ?? '.work/mock-state.sqlite')
@@ -65,6 +68,8 @@ export function mockConfig() {
 const config =
   process.env.PORTAL_PROFILE === 'mock' ? mockConfig() : loadRuntimeConfig()
 const portal = createPortal(config)
+if (config.viewerMode === 'selkies' && config.environment === 'production')
+  assertRemoteMount(config.roots, process.env.NAS_EXPECTED_SOURCE)
 await portal.scan()
 const timer = setInterval(() => void portal.scan(), config.scanIntervalMs)
 timer.unref()
@@ -75,11 +80,27 @@ const server = serve(
       `Portal ${config.identityProvider}/${config.authorizationMode}: ${config.origin}`
     )
 )
+const privateServer =
+  config.viewerMode === 'selkies'
+    ? serve({
+        fetch: portal.internalApp.fetch,
+        hostname: '127.0.0.1',
+        port: config.remote!.appPort
+      })
+    : undefined
+if (config.viewerMode === 'selkies')
+  attachRemoteStream(server as Server, portal, config)
+let shuttingDown = false
 for (const signal of ['SIGTERM', 'SIGINT'])
-  process.on(signal, () => {
+  process.on(signal, async () => {
+    if (shuttingDown) return
+    shuttingDown = true
     clearInterval(timer)
+    await portal.remote?.close()
+    privateServer?.close()
     server.close(() => {
       portal.close()
       process.exit(0)
     })
+    ;(server as Server).closeAllConnections()
   })

@@ -10,12 +10,20 @@ export async function loadScene(
   bytes: ArrayBuffer,
   name: string,
   signal: AbortSignal,
-  progress: (phase: string) => void
+  progress: (phase: string) => void,
+  metrics?: (phase: string, elapsedMs: number) => void
 ) {
+  let checkpoint = performance.now()
+  const measure = (phase: string) => {
+    const now = performance.now()
+    metrics?.(phase, now - checkpoint)
+    checkpoint = now
+  }
   const timeout = AbortSignal.any([signal, AbortSignal.timeout(60000)])
   progress('載入場景')
   const data = await unpackScene(bytes, timeout)
   const graph = deserializeSceneGraph(data)
+  measure('sceneHydrationMs')
   const load = editor.preparationController.begin({
     kind: 'storage-open',
     phase: 'materializing',
@@ -25,11 +33,13 @@ export async function loadScene(
   timeout.addEventListener('abort', stop, { once: true })
   try {
     await applyImportedDocument(editor, graph, load)
+    measure('documentMaterializationMs')
     // Materialize and layout all pages before immutability; page navigation changes only view state.
     for (const page of graph.getPages()) {
       timeout.throwIfAborted()
       await editor.preparePage(page.id, { signal: timeout })
     }
+    measure('layoutMs')
     editor.state.documentName = name
     editor.state.autosaveEnabled = false
     lockGraph(graph)
@@ -41,6 +51,7 @@ export async function loadScene(
       editor.state.sceneVersion
     )
     timeout.throwIfAborted()
+    measure('firstPresentationMs')
     load.complete()
   } catch (error) {
     if (!load.signal.aborted)

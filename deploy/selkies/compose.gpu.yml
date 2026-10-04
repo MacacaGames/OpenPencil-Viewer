@@ -1,0 +1,7 @@
+# Optional overlay. No renderD number is encoded in application configuration.
+services:
+  portal:
+    devices: ['/dev/dri:/dev/dri']
+    group_add:
+      - ${DRM_RENDER_GID:?Set numeric render-device group from stat}
+      - ${DRM_CARD_GID:?Set numeric card-device group from stat}

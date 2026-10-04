@@ -7,8 +7,10 @@ import { MAX_SCENE_BYTES } from '../../packages/transport/scene-wire.ts'
 export async function parseScene(
   source: Readable,
   size: number,
-  signal: AbortSignal
+  signal: AbortSignal,
+  metrics?: (values: { nasReadMs: number; parseMs: number }) => void
 ) {
+  const begin = performance.now()
   signal.throwIfAborted()
   const bytes = new Uint8Array(size)
   let offset = 0
@@ -25,12 +27,13 @@ export async function parseScene(
     source.destroy()
   }
   signal.throwIfAborted()
+  const readAt = performance.now()
   const worker = new Worker(resolve('dist/api/scene-parser.js'), {
     execArgv: [],
     resourceLimits: { maxOldGenerationSizeMb: 512, stackSizeMb: 4 }
   })
   try {
-    return await new Promise<Uint8Array>((resolveResult, reject) => {
+    const result = await new Promise<Uint8Array>((resolveResult, reject) => {
       const abort = () => reject(new AppError('scene-cancelled', 499))
       signal.addEventListener('abort', abort, { once: true })
       worker.once('message', (message: { packed?: Uint8Array }) => {
@@ -53,6 +56,11 @@ export async function parseScene(
       if (signal.aborted) abort()
       else worker.postMessage(bytes.buffer, [bytes.buffer])
     })
+    metrics?.({
+      nasReadMs: readAt - begin,
+      parseMs: performance.now() - readAt
+    })
+    return result
   } finally {
     await worker.terminate()
   }

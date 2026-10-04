@@ -12,6 +12,7 @@ import { loadScene } from '../../portal/upstream-adapter/editor'
 import { readDownload } from '../../portal/transport/download'
 import { MAX_SCENE_BYTES, SCENE_TYPE } from '../../portal/transport/scene-wire'
 import RasterViewer from '../../portal/upstream-adapter/RasterViewer.vue'
+import RemoteViewer from '../../portal/upstream-adapter/RemoteViewer.vue'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 import type { FileRecord } from '../../portal/contracts/index'
 import type { ViewerManifest } from '../../portal/contracts/viewer'
@@ -19,6 +20,7 @@ const manifest = ref<ViewerManifest | null>(null)
 const documentId = ref('')
 const revision = ref('')
 const native = ref(false)
+const remote = ref(false)
 const editor = createTab().store
 useKeyboard()
 const EditorWorkspace = defineAsyncComponent(
@@ -167,6 +169,7 @@ onMounted(async () => {
     provider.value = mode.provider
     authorization.value = mode.authorization
     native.value = mode.viewer === 'native'
+    remote.value = mode.viewer === 'selkies'
     await refresh()
     if (!viewing.value) return
     const id = new URLSearchParams(location.search).get('id')
@@ -199,7 +202,7 @@ onMounted(async () => {
       await loadScene(editor, bytes, metadata.name, abort.signal, (phase) => {
         progress.value = phase
       })
-    } else {
+    } else if (!remote.value) {
       progress.value = '伺服器準備預覽'
       manifest.value = await api<ViewerManifest>(
         '/api/files/' +
@@ -364,6 +367,11 @@ onUnmounted(() => {
         :manifest="manifest"
         :document-id="documentId"
         :revision="revision"
+      />
+      <RemoteViewer
+        v-else-if="remote && documentId && me"
+        :document-id="documentId"
+        :csrf="me.csrf"
       />
       <EditorWorkspace v-else-if="native" />
     </template>

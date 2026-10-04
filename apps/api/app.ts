@@ -6,6 +6,10 @@ import { Readable } from 'node:stream'
 import { parseScene, SceneCache } from './scene.ts'
 import { SCENE_TYPE } from '../../packages/transport/scene-wire.ts'
 import { ViewerRenderer } from './viewer.ts'
+import { RemoteSessions, type RemoteWorker } from './remote-sessions.ts'
+import { LocalRemoteWorker } from './remote-worker.ts'
+import { assertRemoteMount } from './remote-mount.ts'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { parseViewport } from '../../packages/contracts/viewer.ts'
 import type { JWTVerifyGetKey } from 'jose'
 import { constants, openSync, closeSync, fstatSync, readSync } from 'node:fs'
@@ -37,10 +41,11 @@ export function createPortal(
     authorization?: AuthorizationProvider
     index?: FileIndex
     googleTokenKeys?: JWTVerifyGetKey
+    remoteWorker?: RemoteWorker
   } = {}
 ) {
   if (
-    options.googleTokenKeys &&
+    (options.googleTokenKeys || options.remoteWorker) &&
     (config.environment !== 'development' ||
       !['127.0.0.1', 'localhost', '[::1]'].includes(
         new URL(config.origin).hostname
@@ -177,8 +182,8 @@ export function createPortal(
       if (fd !== undefined) closeSync(fd)
     }
   }
-  const identify = async (cookie: string | undefined) => {
-    const session = state.session(cookie)
+  const identify = async (cookie: string | undefined, touch = true) => {
+    const session = state.session(cookie, touch)
     try {
       if (sharedBrowse !== (session.accessProfile === 'google-mount'))
         throw new AppError('login-required', 401)
@@ -249,6 +254,159 @@ export function createPortal(
   const requireOrigin = (origin: string | undefined) => {
     if (origin !== config.origin) throw new AppError('origin-rejected', 403)
   }
+  const streamCookie = config.origin.startsWith('https:')
+    ? '__Host-portal-stream'
+    : 'portal-stream'
+  const streamCookieOptions = {
+    ...cookieOptions,
+    sameSite: 'Strict' as const,
+    maxAge: 90
+  }
+  const remote =
+    config.viewerMode === 'selkies'
+      ? new RemoteSessions(
+          options.remoteWorker ?? new LocalRemoteWorker(config),
+          async (lease) => {
+            if (config.environment === 'production')
+              assertRemoteMount(config.roots, process.env.NAS_EXPECTED_SOURCE)
+            const { session, principal } = await identify(lease.cookie, false)
+            if (session.id !== lease.owner)
+              throw new AppError('remote-expired', 401)
+            const record = await authorize(principal, lease.file.id)
+            if (record.revision !== lease.file.revision)
+              throw new AppError('source-changed', 409)
+            await index.stat(record)
+          }
+        )
+      : undefined
+  const internalApp = new Hono()
+  internalApp.onError((error, c) =>
+    c.json(
+      { error: error instanceof AppError ? error.code : 'remote-failed' },
+      error instanceof AppError ? (error.status as 400) : 500
+    )
+  )
+  internalApp.use('*', async (c, next) => {
+    c.header('Cache-Control', 'no-store')
+    c.header(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' blob: data:; font-src 'self' blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    )
+    await next()
+  })
+  internalApp.get('/_remote/:ticket/metadata', async (c) => {
+    const lease = await remote?.internal(c.req.param('ticket'))
+    if (!lease) throw new AppError('not-found', 404)
+    return c.json({ name: lease.file.name, revision: lease.file.revision })
+  })
+  internalApp.get('/_remote/:ticket/scene', async (c) => {
+    const lease = await remote?.internal(c.req.param('ticket'))
+    if (!lease) throw new AppError('not-found', 404)
+    const record = lease.file,
+      key = record.id + ':' + record.revision
+    let packed = scenes.get(key)
+    const begin = performance.now()
+    if (!packed) {
+      if (parsing) throw new AppError('scene-busy', 429)
+      parsing = true
+      const signal = AbortSignal.any([
+        c.req.raw.signal,
+        lease.abort.signal,
+        AbortSignal.timeout(60000)
+      ])
+      try {
+        const source = await index.open(record, signal)
+        packed = await parseScene(source, record.size, signal, (timings) =>
+          console.log(
+            JSON.stringify({
+              event: 'remote-parse',
+              lease: lease.id,
+              ...timings
+            })
+          )
+        )
+        await remote!.internal(lease.ticket)
+        await index.stat(record)
+        signal.throwIfAborted()
+        scenes.put(key, packed)
+      } finally {
+        parsing = false
+      }
+    }
+    await remote!.internal(lease.ticket)
+    console.log(
+      JSON.stringify({
+        event: 'remote-scene',
+        lease: lease.id,
+        sourceBytes: record.size,
+        sceneBytes: packed.length,
+        elapsedMs: performance.now() - begin
+      })
+    )
+    return new Response(packed, {
+      headers: {
+        'Content-Type': SCENE_TYPE,
+        'Content-Length': String(packed.length),
+        'X-Document-Revision': record.revision,
+        'Cache-Control': 'no-store'
+      }
+    })
+  })
+  internalApp.post(
+    '/_remote/:ticket/ready',
+    bodyLimit({ maxSize: 2048 }),
+    async (c) => {
+      const lease = await remote?.internal(c.req.param('ticket'))
+      if (!lease || !config.remote) throw new AppError('not-found', 404)
+      const data = await c.req.json()
+      const timings = Object.fromEntries(
+        [
+          'sceneHydrationMs',
+          'documentMaterializationMs',
+          'layoutMs',
+          'firstPresentationMs'
+        ].map((key) => [
+          key,
+          Math.min(180000, Math.max(0, Number(data.timings?.[key]) || 0))
+        ])
+      )
+      const result = {
+        ready: data.ready === true,
+        loadMs: Number(data.loadMs) || 0,
+        timings
+      }
+      writeFileSync(
+        config.remote.runtimePath + '/' + lease.id + '/ready.json',
+        JSON.stringify(result),
+        { mode: 0o600 }
+      )
+      console.log(
+        JSON.stringify({
+          event: 'remote-presentation',
+          lease: lease.id,
+          ...result
+        })
+      )
+      return c.json({ ok: true })
+    }
+  )
+  internalApp.all('/_remote/*', () => {
+    throw new AppError('not-found', 404)
+  })
+  internalApp.get('/readonly-runtime.js', (c) =>
+    c.body(readFileSync(config.webPath + '/../api/remote-memory.js'), 200, {
+      'Content-Type': 'application/javascript'
+    })
+  )
+  internalApp.get('/remote-desktop', (c) =>
+    c.html(
+      readFileSync(config.webPath + '/index.html', 'utf8').replace(
+        '<head>',
+        '<head><script src="/readonly-runtime.js"></script>'
+      )
+    )
+  )
+  internalApp.use('/*', serveStatic({ root: config.webPath }))
   app.use('*', async (c, next) => {
     c.header('Cache-Control', 'no-store')
     c.header('Referrer-Policy', 'no-referrer')
@@ -256,7 +414,7 @@ export function createPortal(
     c.header('Cross-Origin-Resource-Policy', 'same-origin')
     c.header(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' blob: data:; font-src 'self' blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+      "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' blob: data:; font-src 'self' blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
     )
     await next()
   })
@@ -296,9 +454,11 @@ export function createPortal(
       provider: config.identityProvider,
       authorization: config.authorizationMode,
       viewer:
-        config.environment === 'production'
-          ? 'raster'
-          : (config.viewerMode ?? 'native')
+        config.viewerMode === 'selkies'
+          ? 'selkies'
+          : config.environment === 'production'
+            ? 'raster'
+            : (config.viewerMode ?? 'native')
     })
   )
   app.use(
@@ -385,6 +545,8 @@ export function createPortal(
     if (c.req.header('X-CSRF-Token') !== session.csrf)
       throw new AppError('csrf-rejected', 403)
     state.revoke(session.id)
+    if (remote?.active?.owner === session.id) await remote.stop()
+    deleteCookie(c, streamCookie, streamCookieOptions)
     deleteCookie(c, cookieName, cookieOptions)
     return c.json({ ok: true })
   })
@@ -398,6 +560,79 @@ export function createPortal(
       authorization: authz.mode,
       maxFileBytes: config.maxFileBytes
     })
+  })
+  app.post('/api/files/:id/remote', async (c) => {
+    if (!remote) throw new AppError('remote-disabled', 404)
+    requireOrigin(c.req.header('Origin'))
+    const cookie = getCookie(c, cookieName)
+    const { session, principal } = await identify(cookie)
+    if (c.req.header('X-CSRF-Token') !== session.csrf)
+      throw new AppError('csrf-rejected', 403)
+    const record = await authorize(principal, c.req.param('id'))
+    if (record.kind !== 'file') throw new AppError('not-found', 404)
+    await index.stat(record)
+    const lease = await remote.create(session.id, cookie!, record)
+    setCookie(c, streamCookie, lease.credential, streamCookieOptions)
+    return c.json({
+      id: lease.id,
+      url: `/stream/${lease.id}/`,
+      expires: lease.expires
+    })
+  })
+  app.post('/api/remote/:id/:action', async (c) => {
+    if (!remote) throw new AppError('remote-disabled', 404)
+    requireOrigin(c.req.header('Origin'))
+    const { session } = await identify(getCookie(c, cookieName), false)
+    if (c.req.header('X-CSRF-Token') !== session.csrf)
+      throw new AppError('csrf-rejected', 403)
+    const lease = await remote.access(
+      c.req.param('id'),
+      session.id,
+      getCookie(c, streamCookie)
+    )
+    if (c.req.param('action') === 'renew') {
+      remote.renew(lease)
+      setCookie(c, streamCookie, lease.credential, streamCookieOptions)
+      return c.json({ expires: lease.expires })
+    }
+    if (c.req.param('action') === 'stop') {
+      await remote.stop(lease.id)
+      deleteCookie(c, streamCookie, streamCookieOptions)
+      return c.json({ ok: true })
+    }
+    throw new AppError('not-found', 404)
+  })
+  app.get('/stream/:id/*', async (c) => {
+    if (!remote) throw new AppError('remote-disabled', 404)
+    const { session } = await identify(getCookie(c, cookieName), false)
+    const lease = await remote.access(
+      c.req.param('id'),
+      session.id,
+      getCookie(c, streamCookie)
+    )
+    const suffix = c.req.path.slice(`/stream/${lease.id}/`.length)
+    c.header(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-eval'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+    )
+    if (!suffix)
+      return c.html(
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><title>OpenPencil 唯讀串流</title></head><body><div id="app"></div><script type="module" src="selkies-core.js"></script></body></html>'
+      )
+    if (suffix === 'selkies-core.js')
+      return c.body(readFileSync(remote.worker.corePath), 200, {
+        'Content-Type': 'application/javascript'
+      })
+    if (suffix === 'manifest.json')
+      return c.json({ name: 'OpenPencil read-only' })
+    throw new AppError('not-found', 404)
+  })
+  // Dedicated loopback listener only; never let the public SPA fallback mask this boundary.
+  app.all('/_remote/*', () => {
+    throw new AppError('not-found', 404)
+  })
+  app.all('/remote-desktop', () => {
+    throw new AppError('not-found', 404)
   })
   app.get('/api/roots', async (c) => {
     const { principal } = await identify(getCookie(c, cookieName))
@@ -526,7 +761,7 @@ export function createPortal(
   app.get('/api/files/:id/scene', async (c) => {
     const { principal } = await identify(getCookie(c, cookieName))
     const record = await authorize(principal, c.req.param('id'))
-    if (config.environment === 'production')
+    if (config.environment === 'production' || config.viewerMode === 'selkies')
       throw new AppError('full-scene-disabled', 410)
     if (record.kind !== 'file') throw new AppError('not-found', 404)
     const stat = async () => {
@@ -577,7 +812,7 @@ export function createPortal(
     const { principal } = await identify(getCookie(c, cookieName))
     const record = await authorize(principal, c.req.param('id'))
     // Raw transport remains solely for existing development confinement probes.
-    if (config.environment === 'production')
+    if (config.environment === 'production' || config.viewerMode === 'selkies')
       throw new AppError('raw-content-disabled', 410)
     if (record.kind !== 'file') throw new AppError('not-found', 404)
     if (c.req.method === 'HEAD') {
@@ -667,6 +902,19 @@ export function createPortal(
     state,
     index,
     authz,
+    remote,
+    internalApp,
+    async remoteConnection(
+      cookie: string,
+      id: string,
+      credential: string | undefined,
+      origin: string | undefined
+    ) {
+      requireOrigin(origin)
+      const { session } = await identify(cookie, false)
+      if (!remote) throw new AppError('remote-disabled', 404)
+      return remote.access(id, session.id, credential)
+    },
     async scan() {
       await index.scan()
       state.saveIndex(
@@ -678,6 +926,7 @@ export function createPortal(
       )
     },
     close() {
+      void remote?.close()
       viewer.close()
       state.close()
     }

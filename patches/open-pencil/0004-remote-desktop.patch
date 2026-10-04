@@ -1,0 +1,19 @@
+--- a/src/router.ts
++++ b/src/router.ts
+@@ -1,6 +1,7 @@
+ import { createRouter, createWebHistory } from 'vue-router'
+ 
+ import WorkspaceView from './views/PortalWorkspace.vue'
++import RemoteDesktop from '../portal/upstream-adapter/RemoteDesktop.vue'
+ 
+ const router = createRouter({
+   history: createWebHistory(),
+@@ -8,6 +9,7 @@
+     { path: '/', component: WorkspaceView },
+     { path: '/storage', redirect: '/' },
+-    { path: '/editor', component: WorkspaceView }
++    { path: '/editor', component: WorkspaceView },
++    { path: '/remote-desktop', component: RemoteDesktop }
+   ]
+ })
+ 

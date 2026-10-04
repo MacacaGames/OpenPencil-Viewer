@@ -27,22 +27,28 @@
     "fixture:create": "node --import tsx scripts/create-fixture.ts",
     "config:check": "node --import tsx apps/api/check-config.ts",
     "release:export": "node --import tsx scripts/export-release.ts",
+    "release:export:selkies": "node --import tsx scripts/export-selkies.ts",
+    "test:remote:gpu": "python3 tests/remote/test_gpu.py",
+    "test:remote:container": "playwright test -c tests/container/playwright.config.ts",
     "format:check": "prettier --check apps packages \"scripts/*.{ts,mjs}\" tests playwright.config.ts tsconfig.json package.json deploy/*.json deploy/*.yml docker-compose.yml .github/workflows/*.yml .gitlab-ci.yml"
   },
   "dependencies": {
     "@hono/node-server": "1.19.17",
+    "fake-indexeddb": "6.2.4",
+    "fflate": "0.8.3",
+    "fzstd": "0.1.1",
     "hono": "4.13.12",
     "jose": "6.2.12",
     "valibot": "1.4.2",
-    "fflate": "0.8.3",
-    "fzstd": "0.1.1"
+    "ws": "8.18.3"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
     "@types/node": "22.19.15",
+    "@types/ws": "8.18.1",
     "esbuild": "0.27.7",
+    "prettier": "3.8.3",
     "tsx": "4.21.0",
-    "typescript": "5.8.3",
-    "prettier": "3.8.3"
+    "typescript": "5.8.3"
   }
 }

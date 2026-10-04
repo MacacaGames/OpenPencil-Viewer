@@ -96,7 +96,7 @@ export class State {
     this.audit(principal.key, '', 'login')
     return token
   }
-  session(token: string | undefined): Session {
+  session(token: string | undefined, touch = true): Session {
     if (!token) throw new AppError('login-required', 401)
     const id = digest(token),
       row = this.db.prepare('SELECT data FROM sessions WHERE id=?').get(id)
@@ -108,10 +108,12 @@ export class State {
       this.revoke(id)
       throw new AppError('login-required', 401)
     }
-    session.touched = now
-    this.db
-      .prepare('UPDATE sessions SET data=? WHERE id=?')
-      .run(JSON.stringify(session), id)
+    if (touch) {
+      session.touched = now
+      this.db
+        .prepare('UPDATE sessions SET data=? WHERE id=?')
+        .run(JSON.stringify(session), id)
+    }
     return session
   }
   revoke(id: string) {

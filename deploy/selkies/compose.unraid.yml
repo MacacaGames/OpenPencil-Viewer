@@ -1,0 +1,54 @@
+name: openpencil-selkies
+services:
+  portal:
+    image: openpencil-viewer:selkies-0.1.0
+    platform: linux/amd64
+    user: '10001:10001'
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./seccomp-chromium.json
+    environment:
+      PORTAL_CONFIG: /config/config.json
+      GOOGLE_OAUTH_FILE: /run/secrets/google-oauth.json
+      NAS_EXPECTED_SOURCE: ${NAS_EXPECTED_SOURCE:?Set the actual CIFS or NFS mount source}
+      GPU_RENDER_PCI: ${GPU_RENDER_PCI:-auto}
+      GPU_ENCODE_PCI: ${GPU_ENCODE_PCI:-auto}
+      GPU_RENDER_MODE: ${GPU_RENDER_MODE:-auto}
+      GPU_ENCODER_MODE: ${GPU_ENCODER_MODE:-auto}
+    # Read-only source; choose exactly the approved share/subdirectory.
+    volumes:
+      - type: bind
+        source: ${PORTAL_CONFIG_DIR:?Set dedicated config directory path}
+        target: /config
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${GOOGLE_OAUTH_FILE:?Set existing OAuth file path}
+        target: /run/secrets/google-oauth.json
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${NAS_DESIGNS_PATH:?Set approved mounted share path}
+        target: /data/designs
+        read_only: true
+        bind: { create_host_path: false, propagation: rprivate }
+      - type: bind
+        source: ${LOCAL_STATE_PATH:?Set local Unraid storage path}
+        target: /state
+        bind: { create_host_path: false }
+    # No public Selkies/private-app ports, Docker socket or host IPC.
+    ports: ['127.0.0.1:24681:3000']
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777
+      - /run:rw,noexec,nosuid,nodev,size=32m,mode=1777
+    shm_size: 1gb
+    mem_limit: 12g
+    pids_limit: 512
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: '10m', max-file: '3' }

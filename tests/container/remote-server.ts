@@ -1,0 +1,45 @@
+// Synthetic-only Linux runtime acceptance harness; not copied into release image.
+import { Hono } from 'hono'
+import { serve } from '@hono/node-server'
+import type { Server } from 'node:http'
+import { createGoogleFixture } from '../helpers/google-mount-fixture.ts'
+import { attachRemoteStream } from '../../apps/api/remote-stream.ts'
+import { createHash } from 'node:crypto'
+import { readFileSync, statSync, readdirSync, mkdirSync } from 'node:fs'
+const port = Number(process.env.FIXTURE_PORT ?? 3000)
+const fixture = await createGoogleFixture('/state/synthetic', port, {
+  viewerMode: 'selkies'
+})
+const app = new Hono()
+mkdirSync('/state/synthetic/remote', { recursive: true })
+app.get('/__fixture/status', (c) =>
+  c.json({
+    lease: fixture.portal.remote?.active?.id,
+    ready: fixture.portal.remote?.active?.ready,
+    sourceHash: createHash('sha256')
+      .update(readFileSync(fixture.source + '/A.fig'))
+      .digest('hex'),
+    sourceMtime: statSync(fixture.source + '/A.fig').mtimeMs,
+    profiles: readdirSync('/state/synthetic/remote')
+  })
+)
+app.route('/', fixture.portal.app)
+const server = serve({
+  fetch: app.fetch,
+  hostname: '0.0.0.0',
+  port
+}) as Server
+const internal = serve({
+  fetch: fixture.portal.internalApp.fetch,
+  hostname: '127.0.0.1',
+  port: 8085
+})
+attachRemoteStream(server, fixture.portal, fixture.config)
+for (const signal of ['SIGINT', 'SIGTERM'])
+  process.on(signal, async () => {
+    await fixture.portal.remote?.close()
+    internal.close()
+    server.close()
+    fixture.close()
+    process.exit(0)
+  })

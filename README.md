@@ -8,6 +8,8 @@
 
 Docker 操作員先看 [QUICK_START](QUICK_START.md)：已依公司 [ApeRelay](https://github.com/macacagames/aperelay) 加入根目錄 Compose、`.env`、GitHub Actions／GHCR 兩平台發布流程。已有 tar 映像可用；GitHub runner 曾因解析器尚未建置而在 API 測試失敗，已修正 build-before-test 順序並通過本機／乾淨 Linux 檢查，遠端重跑及 GHCR 發布結果待確認。詳見 [部署慣例對照](docs/DEPLOYMENT_CONVENTIONS.md)。
 
+Unraid 遠端唯讀方案請看 [Selkies 部署與換卡手冊](docs/UNRAID_SELKIES.zh-TW.md)：固定 Selkies／Chromium，原生 UI 留在伺服器，瀏覽器只接收已授權 H.264 串流。提供獨立 Compose、PCI 裝置選擇、VA-API／CPU 診斷與映像匯出；本機合成 CPU 串流已驗證，Unraid／R7 250／NAS 掛載及真實效能仍需操作員手動驗收。原 raster 部署保留，`dsm-strict` 未因此取得原生 ACL 驗收。
+
 ```sh
 git submodule update --init --recursive
 bun install --frozen-lockfile

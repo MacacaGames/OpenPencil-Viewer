@@ -22,6 +22,7 @@
     "tests/unit/**/*.ts",
     "tests/integration/**/*.ts",
     "tests/e2e/**/*.ts",
+    "tests/container/**/*.ts",
     "playwright.config.ts"
   ],
   "exclude": [".work", "upstream", "node_modules"]

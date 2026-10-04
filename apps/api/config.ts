@@ -1,4 +1,5 @@
 import * as v from 'valibot'
+import { resolve } from 'node:path'
 const nonempty = v.pipe(v.string(), v.minLength(1))
 const schema = v.strictObject({
   version: v.literal(1),
@@ -9,7 +10,33 @@ const schema = v.strictObject({
   port: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535)),
   identityProvider: v.picklist(['mock', 'google-oidc']),
   authorizationMode: v.picklist(['mock', 'dsm-strict', 'google-mount']),
-  viewerMode: v.optional(v.picklist(['raster', 'native'])),
+  viewerMode: v.optional(v.picklist(['raster', 'native', 'selkies'])),
+  remote: v.optional(
+    v.strictObject({
+      runtimePath: nonempty,
+      appPort: v.literal(8085),
+      streamPort: v.literal(8086),
+      maxWidth: v.pipe(
+        v.number(),
+        v.integer(),
+        v.minValue(640),
+        v.maxValue(3840)
+      ),
+      maxHeight: v.pipe(
+        v.number(),
+        v.integer(),
+        v.minValue(480),
+        v.maxValue(2160)
+      ),
+      maxPixels: v.pipe(
+        v.number(),
+        v.integer(),
+        v.minValue(307200),
+        v.maxValue(8294400)
+      ),
+      maxDpi: v.pipe(v.number(), v.integer(), v.minValue(96), v.maxValue(192))
+    })
+  ),
   allowedHostedDomains: v.pipe(
     v.array(
       v.pipe(
@@ -55,6 +82,39 @@ export type Config = v.InferOutput<typeof schema>
 export function parseConfig(raw: unknown): Config {
   const config = v.parse(schema, raw)
   const origin = new URL(config.origin)
+  if (
+    config.viewerMode === 'selkies' &&
+    (config.authorizationMode !== 'google-mount' ||
+      !config.remote ||
+      !config.remote.runtimePath.startsWith('/') ||
+      config.remote.runtimePath === '/' ||
+      config.remote.appPort === config.port ||
+      config.remote.streamPort === config.port)
+  )
+    throw new Error(
+      'selkies requires google-mount and isolated local runtime/ports'
+    )
+  if (config.remote && config.viewerMode !== 'selkies')
+    throw new Error('remote settings require selkies')
+  if (config.viewerMode === 'selkies' && config.remote) {
+    const runtime = resolve(config.remote.runtimePath)
+    const overlaps = (other: string) => {
+      const path = resolve(other)
+      return (
+        runtime === path ||
+        runtime.startsWith(path + '/') ||
+        path.startsWith(runtime + '/')
+      )
+    }
+    if (
+      runtime !== config.remote.runtimePath ||
+      config.roots.some((r) => overlaps(r.path)) ||
+      overlaps(config.webPath)
+    )
+      throw new Error(
+        'remote runtime must be canonical and isolated from source roots and public web assets'
+      )
+  }
   if (config.environment === 'production' && config.viewerMode === 'native')
     throw new Error('production uses the server-rendered viewer')
   if (origin.origin !== config.origin || origin.username || origin.password)

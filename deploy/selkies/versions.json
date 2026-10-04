@@ -1,0 +1,14 @@
+{
+  "base": "lscr.io/linuxserver/chromium@sha256:35e67a28573b13269bb96f9e8464411b4b71467ce46a055a4d584ab5d2c0f06f",
+  "platform": "linux/amd64",
+  "linuxserverBuild": "d759a0f5-ls56",
+  "selkies": "2.0.0",
+  "pixelflux": "2.1.0",
+  "pcmflux": "2.1.0",
+  "node": "22.23.3",
+  "upstream": "8c72b62da07ea1f7e82de84c7c837c3c78dfbf95",
+  "displayBackend": "X11",
+  "transport": "authenticated WebSocket, H.264",
+  "unraidVersion": "operator verification required",
+  "gpuAcceptance": "pending operator diagnostics"
+}
