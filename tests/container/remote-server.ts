@@ -11,11 +11,17 @@ const fixture = await createGoogleFixture('/state/synthetic', port, {
   viewerMode: 'selkies'
 })
 const app = new Hono()
+const zooms = new Map<string, number>()
 mkdirSync('/state/synthetic/remote', { recursive: true })
 app.get('/__fixture/status', (c) =>
   c.json({
-    lease: fixture.portal.remote?.active?.id,
-    ready: fixture.portal.remote?.active?.ready,
+    lease: fixture.portal.remote?.leases[0]?.id,
+    leases: fixture.portal.remote?.leases.map((lease) => ({
+      id: lease.id,
+      slot: lease.slot,
+      zoom: zooms.get(lease.id)
+    })),
+    ready: fixture.portal.remote?.leases[0]?.ready,
     sourceHash: createHash('sha256')
       .update(readFileSync(fixture.source + '/A.fig'))
       .digest('hex'),
@@ -30,7 +36,36 @@ const server = serve({
   port
 }) as Server
 const internal = serve({
-  fetch: fixture.portal.internalApp.fetch,
+  fetch: async (request) => {
+    const url = new URL(request.url)
+    if (url.pathname === '/__fixture/metrics.js')
+      return new Response(
+        `
+        const ticket = new URLSearchParams(location.search).get('ticket');
+        setInterval(() => {
+          const value = parseFloat(document.querySelector('[data-test-id="zoom-dropdown-trigger"]')?.textContent ?? '');
+          if (Number.isFinite(value)) fetch('/__fixture/metrics?ticket='+ticket, {method:'POST', body:String(value)});
+        },100);
+      `,
+        { headers: { 'Content-Type': 'application/javascript' } }
+      )
+    if (url.pathname === '/__fixture/metrics' && request.method === 'POST') {
+      const lease = await fixture.portal.remote?.internal(
+        url.searchParams.get('ticket') ?? ''
+      )
+      if (lease) zooms.set(lease.id, Number(await request.text()))
+      return new Response('ok')
+    }
+    const response = await fixture.portal.internalApp.fetch(request)
+    if (url.pathname !== '/remote-desktop') return response
+    return new Response(
+      (await response.text()).replace(
+        '<head>',
+        '<head><script src="/__fixture/metrics.js"></script>'
+      ),
+      { headers: response.headers }
+    )
+  },
   hostname: '127.0.0.1',
   port: 8085
 })

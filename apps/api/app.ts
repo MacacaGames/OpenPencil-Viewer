@@ -49,7 +49,7 @@ export function createPortal(
     authorization?: AuthorizationProvider
     index?: FileIndex
     googleTokenKeys?: JWTVerifyGetKey
-    remoteWorker?: RemoteWorker
+    remoteWorker?: (slot: number) => RemoteWorker
   } = {}
 ) {
   if (
@@ -81,6 +81,7 @@ export function createPortal(
   const viewer = new ViewerRenderer(config.webPath)
   const thumbnails = new ThumbnailCache()
   let parsing = false
+  let remoteParseQueue = Promise.resolve()
   try {
     if (!options.index) index.restore(state.loadIndex())
   } catch (error) {
@@ -287,7 +288,8 @@ export function createPortal(
   const remote =
     config.viewerMode === 'selkies'
       ? new RemoteSessions(
-          options.remoteWorker ?? new LocalRemoteWorker(config),
+          options.remoteWorker ??
+            ((slot) => new LocalRemoteWorker(config, slot)),
           async (lease) => {
             if (config.environment === 'production')
               assertRemoteMount(config.roots, process.env.NAS_EXPECTED_SOURCE)
@@ -298,7 +300,9 @@ export function createPortal(
             if (record.revision !== lease.file.revision)
               throw new AppError('source-changed', 409)
             await index.stat(record)
-          }
+          },
+          Date.now,
+          config.remote!.maxSessions
         )
       : undefined
   const internalApp = new Hono()
@@ -339,7 +343,13 @@ export function createPortal(
     let packed = scenes.get(key)
     const begin = performance.now()
     if (!packed) {
-      if (parsing) throw new AppError('scene-busy', 429)
+      // Serialize cold imports so simultaneous opens do not fail scene-busy.
+      const previous = remoteParseQueue
+      let release!: () => void
+      remoteParseQueue = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      await previous
       parsing = true
       const signal = AbortSignal.any([
         c.req.raw.signal,
@@ -347,22 +357,28 @@ export function createPortal(
         AbortSignal.timeout(60000)
       ])
       try {
-        const source = await index.open(record, signal)
-        packed = await parseScene(source, record.size, signal, (timings) =>
-          console.log(
-            JSON.stringify({
-              event: 'remote-parse',
-              lease: lease.id,
-              ...timings
-            })
-          )
-        )
-        await remote!.internal(lease.ticket)
-        await index.stat(record)
         signal.throwIfAborted()
-        scenes.put(key, packed)
+        await remote!.internal(lease.ticket)
+        packed = scenes.get(key)
+        if (!packed) {
+          const source = await index.open(record, signal)
+          packed = await parseScene(source, record.size, signal, (timings) =>
+            console.log(
+              JSON.stringify({
+                event: 'remote-parse',
+                lease: lease.id,
+                ...timings
+              })
+            )
+          )
+          await remote!.internal(lease.ticket)
+          await index.stat(record)
+          signal.throwIfAborted()
+          scenes.put(key, packed)
+        }
       } finally {
         parsing = false
+        release()
       }
     }
     await remote!.internal(lease.ticket)
@@ -578,8 +594,7 @@ export function createPortal(
     if (c.req.header('X-CSRF-Token') !== session.csrf)
       throw new AppError('csrf-rejected', 403)
     state.revoke(session.id)
-    if (remote?.active?.owner === session.id)
-      await remote.stop(undefined, 'logout')
+    await remote?.stopOwner(session.id, 'logout')
     deleteCookie(c, streamCookie, streamCookieOptions)
     deleteCookie(c, cookieName, cookieOptions)
     return c.json({ ok: true })
@@ -710,7 +725,7 @@ export function createPortal(
         { 'Content-Type': 'application/javascript' }
       )
     if (suffix === 'selkies-core.js')
-      return c.body(readFileSync(remote.worker.corePath), 200, {
+      return c.body(readFileSync(remote.workerFor(lease).corePath), 200, {
         'Content-Type': 'application/javascript'
       })
     if (suffix === 'manifest.json')

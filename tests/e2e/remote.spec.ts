@@ -36,6 +36,12 @@ test('Remote browser receives no graph; private native session edits remain in m
     mtime = statSync(source).mtimeMs,
     requests: string[] = []
   page.on('request', (request) => requests.push(request.url()))
+  const input: string[] = []
+  page.on('websocket', (socket) =>
+    socket.on('framesent', ({ payload }) => {
+      if (typeof payload === 'string') input.push(payload)
+    })
+  )
   await login(page)
   await page.getByRole('button', { name: /^A.fig/ }).dblclick()
   const iframe = page.frameLocator('iframe[title="OpenPencil 遠端畫面"]')
@@ -50,6 +56,36 @@ test('Remote browser receives no graph; private native session edits remain in m
     page.getByRole('combobox', { name: '遠端文字大小' })
   ).toHaveValue('1.25')
   await page.getByRole('combobox', { name: '遠端文字大小' }).selectOption('1.5')
+  const streamCanvas = iframe.locator('#synthetic-stream')
+  // Wheel modifiers alone: keydown may occur outside the iframe or be absent for pinch.
+  for (const modifier of ['ctrlKey', 'metaKey', 'overlay']) {
+    input.length = 0
+    await streamCanvas.evaluate((element, modifier) => {
+      const box = element.getBoundingClientRect()
+      let target = element
+      if (modifier === 'overlay') {
+        const input = document.createElement('input')
+        input.id = 'overlayInput'
+        document.body.append(input)
+        target = input
+      }
+      target.dispatchEvent(
+        new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          clientX: box.left + box.width / 2,
+          clientY: box.top + box.height / 2,
+          deltaY: -120,
+          [modifier === 'overlay' ? 'metaKey' : modifier]: true
+        })
+      )
+    }, modifier)
+    await expect
+      .poll(() => input.some((message) => /^m,\d+,\d+,16,1$/.test(message)))
+      .toBe(true)
+    expect(input[0]).toBe('kd,65507')
+    expect(input.at(-1)).toBe('ku,65507')
+  }
   await expect(page.locator('canvas')).toHaveCount(0)
   expect(requests.some((url) => /\/(scene|content)(?:\?|$)/.test(url))).toBe(
     false

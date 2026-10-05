@@ -17,6 +17,7 @@ const limits = {
   runtimePath: '/state/remote',
   appPort: 8085 as const,
   streamPort: 8086 as const,
+  maxSessions: 4,
   maxWidth: 1920,
   maxHeight: 1080,
   maxPixels: 2073600,
@@ -217,9 +218,10 @@ test('Exclusive lease reserves before startup, never shares controls, aborts and
     }
   }
   const manager = new RemoteSessions(
-    worker,
+    () => worker,
     async () => undefined,
-    () => now
+    () => now,
+    1
   )
   try {
     const file = {
@@ -284,11 +286,12 @@ test('Remote lifecycle distinguishes missing stream, expiry, worker failure and 
     alive: () => alive
   }
   const manager = new RemoteSessions(
-    worker,
+    () => worker,
     async () => {
       if (rejected) throw rejected
     },
-    () => now
+    () => now,
+    1
   )
   const file = {
     id: 'file',
@@ -310,7 +313,7 @@ test('Remote lifecycle distinguishes missing stream, expiry, worker failure and 
     // No display client after readiness is different from a document failure.
     now += 15001
     await poll()
-    assert.equal(manager.active, undefined)
+    assert.equal(manager.leases.length, 0)
     assert.equal(reports().at(-1).reason, 'stream-disconnected')
     assert.equal(reports().at(-1).ready, true)
     assert.equal(reports().at(-1).connections, 0)
@@ -362,4 +365,102 @@ test('Remote lifecycle distinguishes missing stream, expiry, worker failure and 
   } finally {
     await manager.close()
   }
+})
+
+test('Concurrent leases isolate workers, tickets, sockets and cleanup; capacity includes retiring slots', async () => {
+  const releases = new Map<number, () => void>()
+  const stops: number[] = []
+  const manager = new RemoteSessions(
+    (slot) => ({
+      streamUrl: `http://127.0.0.1:${8086 + slot}`,
+      corePath: '/unused',
+      start: async () =>
+        new Promise<void>((resolve) => releases.set(slot, resolve)),
+      stop: async () => {
+        stops.push(slot)
+        await new Promise<void>((resolve) => releases.set(slot, resolve))
+      }
+    }),
+    async () => undefined,
+    Date.now,
+    2
+  )
+  const file = {
+    id: 'file',
+    rootId: 'designs',
+    relative: 'A.fig',
+    name: 'A.fig',
+    parentId: '',
+    kind: 'file' as const,
+    size: 1,
+    revision: '1'
+  }
+  try {
+    const pendingA = manager.create('A', 'cookie-A', file)
+    const pendingB = manager.create('B', 'cookie-B', file)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(manager.leases.length, 2)
+    assert.deepEqual([...releases.keys()], [0, 1])
+    await assert.rejects(manager.create('C', 'cookie-C', file), /remote-busy/)
+    releases.get(0)!()
+    releases.get(1)!()
+    const [a, b] = await Promise.all([pendingA, pendingB])
+    assert.notEqual(a.ticket, b.ticket)
+    assert.notEqual(
+      manager.workerFor(a).streamUrl,
+      manager.workerFor(b).streamUrl
+    )
+    await assert.rejects(
+      manager.access(a.id, 'B', b.credential),
+      /remote-expired/
+    )
+    assert.equal(await manager.internal(b.ticket), b)
+    let closedA = false,
+      closedB = false
+    manager.connectionsFor(a)!.add(() => {
+      closedA = true
+    })
+    manager.connectionsFor(b)!.add(() => {
+      closedB = true
+    })
+    manager.connected(a)
+    manager.connected(b)
+    const closing = manager.stopOwner('A')
+    assert.equal(closedA, true)
+    assert.equal(closedB, false)
+    assert.equal(manager.has(b), true)
+    await assert.rejects(manager.create('C', 'cookie-C', file), /remote-busy/)
+    releases.get(0)!()
+    await closing
+    assert.equal(await manager.access(b.id, 'B', b.credential), b)
+    const pendingC = manager.create('C', 'cookie-C', file)
+    await new Promise((resolve) => setImmediate(resolve))
+    releases.get(0)!()
+    const c = await pendingC
+    assert.equal(c.slot, 0)
+    const closingAll = manager.close()
+    releases.get(0)!()
+    releases.get(1)!()
+    await closingAll
+    assert.equal(manager.leases.length, 0)
+    assert.deepEqual(stops, [0, 1, 0])
+  } finally {
+    const closing = manager.close()
+    for (const release of releases.values()) release()
+    await closing
+  }
+})
+
+test('Remote capacity defaults to four and rejects invalid limits or overlapping public ports', () => {
+  const raw = JSON.parse(
+    readFileSync('deploy/selkies/config.example.json', 'utf8')
+  )
+  raw.googleClientId = raw.googleClientSecret = 'synthetic'
+  delete raw.remote.maxSessions
+  assert.equal(parseConfig(raw).remote?.maxSessions, 4)
+  for (const maxSessions of [0, 9, 2.5])
+    assert.throws(() =>
+      parseConfig({ ...raw, remote: { ...raw.remote, maxSessions } })
+    )
+  assert.throws(() => parseConfig({ ...raw, port: 8087 }), /isolated/)
 })

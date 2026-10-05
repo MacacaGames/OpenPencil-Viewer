@@ -25,6 +25,7 @@
     "runtimePath": "/state/remote",
     "appPort": 8085,
     "streamPort": 8086,
+    "maxSessions": 4,
     "maxWidth": 1920,
     "maxHeight": 1080,
     "maxPixels": 2073600,

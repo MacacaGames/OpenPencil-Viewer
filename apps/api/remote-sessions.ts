@@ -9,6 +9,7 @@ export function secretEqual(a: string | undefined, b: string) {
 }
 export interface RemoteLease {
   id: string
+  slot: number
   credential: string
   ticket: string
   owner: string
@@ -47,17 +48,27 @@ export function remoteErrorCode(error: unknown, fallback: string) {
     : fallback
 }
 
-/** One exclusive display, with a new browser/profile/display/encoder per lease. */
+/** Bounded independent displays; slots remain reserved until cleanup completes. */
 export class RemoteSessions {
-  active?: RemoteLease
-  private closing?: Promise<void>
+  private entries = new Map<
+    string,
+    {
+      lease: RemoteLease
+      worker: RemoteWorker
+      connections: Set<() => void>
+      closing?: Promise<void>
+    }
+  >()
+  private closed = false
   private timer: NodeJS.Timeout
-  readonly connections = new Set<() => void>()
   constructor(
-    readonly worker: RemoteWorker,
+    private createWorker: (slot: number) => RemoteWorker,
     private validate: (lease: RemoteLease) => Promise<void>,
-    private now = Date.now
+    private now = Date.now,
+    private maxSessions = 4
   ) {
+    if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > 8)
+      throw new Error('invalid remote capacity')
     this.timer = setInterval(
       () =>
         void this.check().catch(() =>
@@ -73,10 +84,22 @@ export class RemoteSessions {
     file: FileRecord,
     display?: RemoteDisplay
   ) {
-    if (this.active || this.closing) throw new AppError('remote-busy', 429)
+    const reserved = [...this.entries.values()]
+    if (
+      this.closed ||
+      reserved.length >= this.maxSessions ||
+      reserved.some(({ lease }) => lease.owner === owner)
+    )
+      throw new AppError('remote-busy', 429)
+    const slot = Array.from(
+      { length: this.maxSessions },
+      (_, index) => index
+    ).find((index) => !reserved.some(({ lease }) => lease.slot === index))!
+    const worker = this.createWorker(slot)
     const startedAt = this.now()
     const lease: RemoteLease = {
       id: token(),
+      slot,
       credential: token(),
       ticket: token(),
       owner,
@@ -88,12 +111,12 @@ export class RemoteSessions {
       disconnectedAt: 0,
       display
     }
-    this.active = lease // Reserve before awaiting any process or parsing.
+    this.entries.set(lease.id, { lease, worker, connections: new Set() }) // Reserve before awaiting startup.
     try {
       await this.validate(lease)
-      await this.worker.start(lease)
+      await worker.start(lease)
       await this.validate(lease)
-      if (this.active !== lease) throw new AppError('remote-expired', 401)
+      if (!this.has(lease)) throw new AppError('remote-expired', 401)
       lease.ready = true
       lease.expires = this.now() + 90000
       lease.disconnectedAt = this.now()
@@ -117,7 +140,7 @@ export class RemoteSessions {
     credential: string | undefined,
     ready = true
   ) {
-    const lease = this.active
+    const lease = this.entries.get(id)?.lease
     if (
       !lease ||
       lease.id !== id ||
@@ -128,11 +151,11 @@ export class RemoteSessions {
     )
       throw new AppError('remote-expired', 401)
     await this.validate(lease)
-    if (this.active !== lease) throw new AppError('remote-expired', 401)
+    if (!this.has(lease)) throw new AppError('remote-expired', 401)
     return lease
   }
   async internal(ticket: string) {
-    const lease = this.active
+    const lease = this.leases.find((lease) => secretEqual(ticket, lease.ticket))
     if (
       !lease ||
       !secretEqual(ticket, lease.ticket) ||
@@ -140,28 +163,60 @@ export class RemoteSessions {
     )
       throw new AppError('not-found', 404)
     await this.validate(lease)
-    if (this.active !== lease) throw new AppError('not-found', 404)
+    if (!this.has(lease)) throw new AppError('not-found', 404)
     return lease
   }
   renew(lease: RemoteLease) {
-    if (this.active !== lease) throw new AppError('remote-expired', 401)
+    if (!this.has(lease)) throw new AppError('remote-expired', 401)
     lease.expires = this.now() + 90000
   }
+  get leases() {
+    return [...this.entries.values()]
+      .filter((entry) => !entry.closing && !entry.lease.abort.signal.aborted)
+      .map((entry) => entry.lease)
+  }
+  has(lease: RemoteLease) {
+    const entry = this.entries.get(lease.id)
+    return (
+      entry?.lease === lease && !entry.closing && !lease.abort.signal.aborted
+    )
+  }
+  workerFor(lease: RemoteLease) {
+    if (!this.has(lease)) throw new AppError('remote-expired', 401)
+    return this.entries.get(lease.id)!.worker
+  }
+  connectionsFor(lease: RemoteLease) {
+    return this.entries.get(lease.id)?.connections
+  }
   connected(lease: RemoteLease) {
-    if (this.active === lease) lease.disconnectedAt = 0
+    if (this.has(lease)) lease.disconnectedAt = 0
   }
   disconnected(lease: RemoteLease) {
-    if (this.active === lease && this.connections.size === 0)
+    if (this.has(lease) && this.connectionsFor(lease)?.size === 0)
       lease.disconnectedAt = this.now()
+  }
+  async stopOwner(owner: string, reason: RemoteStopReason = 'logout') {
+    await Promise.all(
+      [...this.entries.values()]
+        .filter(({ lease }) => lease.owner === owner)
+        .map(({ lease }) => this.stop(lease.id, reason))
+    )
   }
   async stop(
     id?: string,
     reason: RemoteStopReason = 'requested',
     error?: unknown
-  ) {
-    const lease = this.active
-    if (id && lease?.id !== id) return
-    if (!lease) return this.closing
+  ): Promise<void> {
+    if (!id) {
+      await Promise.all(
+        [...this.entries.keys()].map((key) => this.stop(key, reason, error))
+      )
+      return
+    }
+    const entry = this.entries.get(id)
+    if (!entry) return
+    if (entry.closing) return entry.closing
+    const { lease, worker, connections } = entry
     console.log(
       JSON.stringify({
         event: 'remote-session-stop',
@@ -170,28 +225,33 @@ export class RemoteSessions {
         errorCode:
           error === undefined ? undefined : remoteErrorCode(error, reason),
         ready: lease.ready,
-        connections: this.connections.size
+        connections: connections.size
       })
     )
-    this.active = undefined
     lease.abort.abort()
-    for (const close of this.connections) close()
-    this.connections.clear()
-    this.closing = this.worker.stop(lease.id).then(() => {
-      this.closing = undefined
+    for (const close of connections) close()
+    connections.clear()
+    // Failed cleanup retains the slot; never reuse a display with leftover children.
+    entry.closing = worker.stop(lease.id).then(() => {
+      this.entries.delete(id)
     })
-    await this.closing
+    await entry.closing
   }
   private async check() {
-    const lease = this.active
-    if (!lease) return
+    await Promise.all(this.leases.map((lease) => this.checkLease(lease)))
+  }
+  private async checkLease(lease: RemoteLease) {
     let reason: RemoteStopReason = 'validation-failed'
     try {
       if (lease.expires <= this.now()) {
         reason = 'lease-expired'
         throw new Error(reason)
       }
-      if (lease.ready && this.worker.alive && !this.worker.alive()) {
+      if (
+        lease.ready &&
+        this.workerFor(lease).alive &&
+        !this.workerFor(lease).alive!()
+      ) {
         reason = 'worker-exited'
         throw new Error(reason)
       }
@@ -209,6 +269,7 @@ export class RemoteSessions {
     }
   }
   close() {
+    this.closed = true
     clearInterval(this.timer)
     return this.stop(undefined, 'shutdown')
   }

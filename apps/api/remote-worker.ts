@@ -21,8 +21,11 @@ export class LocalRemoteWorker implements RemoteWorker {
   private failure?: Error
   private starting?: Promise<void>
   private lease?: RemoteLease
-  constructor(private config: Config) {
-    this.streamUrl = `http://127.0.0.1:${config.remote!.streamPort}`
+  constructor(
+    private config: Config,
+    private slot = 0
+  ) {
+    this.streamUrl = `http://127.0.0.1:${config.remote!.streamPort + slot}`
   }
   start(lease: RemoteLease) {
     this.lease = lease
@@ -58,7 +61,7 @@ export class LocalRemoteWorker implements RemoteWorker {
       ...process.env,
       HOME: this.directory,
       XDG_RUNTIME_DIR: this.directory + '/runtime',
-      DISPLAY: ':1',
+      DISPLAY: `:${this.slot + 1}`,
       AUTO_GPU: 'false',
       DRI_NODE: plan.encodeNode || '',
       DRINODE: plan.renderNode || '',
@@ -86,6 +89,13 @@ export class LocalRemoteWorker implements RemoteWorker {
       SELKIES_ENABLE_RESIZE: 'true|locked',
       SELKIES_ALLOWED_ORIGINS: this.config.origin,
       SELKIES_MASTER_TOKEN: '',
+      SELKIES_UNIX_SOCKET: '',
+      SELKIES_COMPUTER_USE_BIND: '',
+      SELKIES_JS_SOCKET_PATH: this.directory + '/runtime',
+      SELKIES_WEBCAM_SOCKET_PATH: this.directory + '/runtime',
+      SELKIES_APP_READY_FILE: this.directory + '/app-ready',
+      SELKIES_UINPUT_MOUSE_SOCKET: '',
+      SELKIES_PUBLISH_INPUT_DEVICES: 'false|locked',
       FILE_MANAGER_PATH: this.directory + '/empty',
       PIXELFLUX_WAYLAND: 'false',
       PIXELFLUX_RECORDING_SOCKET: '',
@@ -143,7 +153,7 @@ export class LocalRemoteWorker implements RemoteWorker {
       return child
     }
     const displayArgs = [
-      ':1',
+      env.DISPLAY,
       '-screen',
       '0',
       `${lease.display?.width ?? 1920}x${lease.display?.height ?? 1080}x24`,
@@ -160,7 +170,7 @@ export class LocalRemoteWorker implements RemoteWorker {
       'XTEST'
     ]
     if (
-      await access('/tmp/.X11-unix/X1').then(
+      await access(`/tmp/.X11-unix/X${this.slot + 1}`).then(
         () => true,
         () => false
       )
@@ -175,7 +185,7 @@ export class LocalRemoteWorker implements RemoteWorker {
         check()
         if (this.failure) throw new AppError('remote-display-failed', 503)
         if (
-          await access('/tmp/.X11-unix/X1').then(
+          await access(`/tmp/.X11-unix/X${this.slot + 1}`).then(
             () => true,
             () => false
           )
@@ -228,7 +238,7 @@ export class LocalRemoteWorker implements RemoteWorker {
       '--addr',
       '127.0.0.1',
       '--port',
-      String(settings.streamPort),
+      String(settings.streamPort + this.slot),
       '--web-root',
       '/app/tools/remote/empty'
     ])

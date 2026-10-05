@@ -36,4 +36,6 @@ Playwright Chromium 未安裝時，可指定 `REMOTE_TEST_BROWSER` 為已安裝 
 
 串流頁載入 adapter 的 `portal-client.js`，將 pinned Selkies core 送給 iframe 自己的 video-ready 事件，轉成固定的同源父視窗通知；外層依 Origin／iframe source 驗證後重送尺寸。初始 SETTINGS 也保留經上限限制的 manual width/height。若看到早期 `Cannot send resolution ... Connection not open`，需確認後續尺寸是否同步；若一直停在1024×768，仍屬失敗。`tests/e2e/remote.spec.ts` 另有 socket 晚於 iframe load 的合成回歸案例。
 
-原生 UI 編輯與 reload 清除另由 tests/e2e/remote.spec.ts 驗證；此 H.264 gate 核對真實 Linux Chromium 啟動、串流、輸入、resize、隔離和清理，不能把它當作 Unraid GPU／所有編輯工具驗收。
+H.264 gate 讓兩個獨立Google帳號同時開啟同一份合成FIG，驗證兩路影片、獨立profile與縮放，以及A登出後B仍可縮放。Ctrl、Command及無key-down的觸控板Ctrl-wheel都須改變原生UI的縮放百分比；僅收到新frame不算縮放成功。測試專用private script回報原生zoom控制值，harness與此script不進正式映像。原生 UI 編輯與 reload 清除另由 tests/e2e/remote.spec.ts 驗證；此 H.264 gate 核對真實 Linux Chromium 啟動、串流、輸入、resize、隔離和清理，不能把它當作 Unraid GPU／所有編輯工具驗收。
+
+固定Selkies版本使用worker擁有WebSocket，adapter觀察其page-side `selkiesTransport`；fallback則使用頁面WebSocket。透明`overlayInput`／`keyboard-input-assist`也視為串流輸入目標，游標位置需落在實際影片範圍。垂直wheel bit與固定版本的X11/client行為一致；套件更新須重跑上述實際zoom與併發驗收。

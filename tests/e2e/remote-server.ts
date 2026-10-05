@@ -5,7 +5,7 @@ import { WebSocketServer } from 'ws'
 import type { Server } from 'node:http'
 import { once } from 'node:events'
 import { resolve } from 'node:path'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import {
   createGoogleFixture,
   fixtureCode
@@ -13,6 +13,7 @@ import {
 import { attachRemoteStream } from '../../apps/api/remote-stream.ts'
 import type { RemoteLease } from '../../apps/api/remote-sessions.ts'
 const base = resolve('.work/remote-e2e')
+rmSync(base, { recursive: true, force: true })
 mkdirSync(base, { recursive: true })
 const corePath = resolve(base, 'synthetic-core.js')
 writeFileSync(
@@ -50,7 +51,7 @@ const worker = {
 }
 const fixture = await createGoogleFixture(base, 3215, {
   viewerMode: 'selkies',
-  remoteWorker: worker
+  remoteWorker: () => worker
 })
 const app = new Hono()
 app.get('/__fixture/google', (c) => {
@@ -64,7 +65,7 @@ app.get('/__fixture/google', (c) => {
   )
 })
 app.get('/__fixture/lease', (c) =>
-  c.json({ ticket: fixture.portal.remote?.active?.ticket })
+  c.json({ ticket: fixture.portal.remote?.leases[0]?.ticket })
 )
 app.route('/', fixture.portal.app)
 const server = serve({

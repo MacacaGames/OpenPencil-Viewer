@@ -3,12 +3,13 @@ import { fixtureCode } from '../helpers/google-mount-fixture.ts'
 const origin = process.env.REMOTE_TEST_ORIGIN ?? 'http://127.0.0.1:24682'
 test.use({ deviceScaleFactor: 2 })
 test('real Linux Selkies H.264, resize, logout and source integrity (synthetic only)', async ({
-  page
+  page,
+  browser
 }) => {
   const requests: string[] = [],
     packets: number[] = [],
     reportedStreams = new Set<string>()
-  let account = 'A'
+  const account = 'A'
   let approvedDisplay: { width: number; height: number } | undefined
   page.on('response', (response) => {
     if (
@@ -165,6 +166,15 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
   expect(rendered.height).toBeLessThanOrEqual(1080)
   expect(packets.length).toBeGreaterThan(0)
   await page.screenshot({ path: '.work/selkies-ci/session-edit-stream.png' })
+  const nativeZoom = async (id: string) => {
+    const status = await (
+      await page.request.get(origin + '/__fixture/status')
+    ).json()
+    return status.leases.find((lease: { id: string }) => lease.id === id)
+      ?.zoom as number | undefined
+  }
+  await expect.poll(() => nativeZoom(firstLease)).toBeGreaterThan(0)
+  const zoomBefore = (await nativeZoom(firstLease))!
   const framesBefore = await video.evaluate(
     (v) => (v as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames
   )
@@ -174,6 +184,28 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
   await page.keyboard.down('Control')
   for (let i = 0; i < 4; i++) await page.mouse.wheel(0, -120)
   await page.keyboard.up('Control')
+  await expect.poll(() => nativeZoom(firstLease)).toBeGreaterThan(zoomBefore)
+  const afterCtrl = (await nativeZoom(firstLease))!
+  await page.keyboard.down('Meta')
+  await page.mouse.wheel(0, -120)
+  await page.keyboard.up('Meta')
+  await expect.poll(() => nativeZoom(firstLease)).toBeGreaterThan(afterCtrl)
+  const afterMeta = (await nativeZoom(firstLease))!
+  // Pinch has ctrlKey without a preceding physical keydown.
+  await video.evaluate((element) => {
+    const box = element.getBoundingClientRect()
+    element.dispatchEvent(
+      new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: true,
+        deltaY: -100,
+        clientX: box.left + box.width / 2,
+        clientY: box.top + box.height / 2
+      })
+    )
+  })
+  await expect.poll(() => nativeZoom(firstLease)).toBeGreaterThan(afterMeta)
   await page.keyboard.down('Space')
   await page.mouse.down()
   await page.mouse.move(
@@ -241,68 +273,135 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
     })
   )
   await expect.poll(() => reportedStreams.size).toBe(1)
-  await page.getByRole('button', { name: '登出', exact: true }).click()
-  await expect(page.locator('iframe')).toHaveCount(0)
-  await expect
-    .poll(
-      async () =>
-        (await (await page.request.get(origin + '/__fixture/status')).json())
-          .profiles
-    )
-    .toEqual([])
-  const after = await (
-    await page.request.get(origin + '/__fixture/status')
-  ).json()
-  expect(after.sourceHash).toBe(before.sourceHash)
-  expect(after.sourceMtime).toBe(before.sourceMtime)
-  account = 'B'
-  approvedDisplay = undefined
-  await page.getByRole('link', { name: 'Google Workspace 登入' }).click()
-  const warmStart = Date.now()
-  await page.getByRole('button', { name: /^A.fig/ }).dblclick()
-  await expect(frame.locator('video').first()).toBeVisible({ timeout: 150000 })
-  await expect
-    .poll(
-      () =>
-        frame
-          .locator('video')
-          .first()
-          .evaluate(
-            (v) =>
-              (v as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames
-          ),
-      { timeout: 15000 }
-    )
-    .toBeGreaterThan(0)
-  await waitForDisplay()
-  const second = await (
-    await page.request.get(origin + '/__fixture/status')
-  ).json()
-  expect(second.lease).not.toBe(firstLease)
-  expect(second.profiles).toEqual([second.lease])
-  await expect.poll(() => reportedStreams.size).toBe(2)
-  console.log(
-    JSON.stringify({
-      host: 'local Docker synthetic',
-      warmOtherUserFirstDecodedFrameMs: Date.now() - warmStart,
-      profilesIsolated: true
+
+  const secondContext = await browser.newContext({
+    viewport: { width: 1440, height: 960 },
+    deviceScaleFactor: 2
+  })
+  const secondPage = await secondContext.newPage()
+  try {
+    await secondPage.route(origin + '/auth/google/start', async (route) => {
+      const start = await route.fetch({ maxRedirects: 0 }),
+        url = new URL(start.headers().location)
+      await route.fulfill({
+        response: start,
+        headers: {
+          ...start.headers(),
+          location:
+            origin +
+            '/auth/google/callback?' +
+            new URLSearchParams({
+              state: url.searchParams.get('state')!,
+              code: fixtureCode(url, 'B')
+            })
+        }
+      })
     })
-  )
-  await page.getByRole('button', { name: '登出', exact: true }).click()
-  await expect
-    .poll(
-      async () =>
-        (await (await page.request.get(origin + '/__fixture/status')).json())
-          .profiles
+    await secondPage.goto(origin)
+    await secondPage
+      .getByRole('link', { name: 'Google Workspace 登入' })
+      .click()
+    secondPage.on('request', (request) => requests.push(request.url()))
+    const secondStreams = new Set<string>()
+    secondPage.on('websocket', (socket) =>
+      socket.on('framereceived', ({ payload }) => {
+        if (typeof payload === 'string') {
+          try {
+            if (JSON.parse(payload).type === 'stream_info')
+              secondStreams.add(socket.url())
+          } catch {}
+        }
+      })
     )
-    .toEqual([])
-  await expect(page.locator('iframe')).toHaveCount(0)
-  await expect(
-    page.getByRole('link', { name: 'Google Workspace 登入' })
-  ).toBeVisible()
-  const final = await (
-    await page.request.get(origin + '/__fixture/status')
-  ).json()
-  expect(final.sourceHash).toBe(before.sourceHash)
-  expect(final.sourceMtime).toBe(before.sourceMtime)
+    const warmStart = Date.now()
+    await secondPage.getByRole('button', { name: /^A.fig/ }).dblclick()
+    const secondVideo = secondPage
+      .frameLocator('iframe[title="OpenPencil 遠端畫面"]')
+      .locator('video')
+      .first()
+    await expect(secondVideo).toBeVisible({ timeout: 150000 })
+    await expect
+      .poll(
+        () =>
+          secondVideo.evaluate(
+            (element) =>
+              (element as HTMLVideoElement).getVideoPlaybackQuality()
+                .totalVideoFrames
+          ),
+        { timeout: 20000 }
+      )
+      .toBeGreaterThan(0)
+    await expect
+      .poll(
+        () =>
+          secondVideo.evaluate(
+            (element) => (element as HTMLVideoElement).videoWidth
+          ),
+        { timeout: 20000 }
+      )
+      .toBeGreaterThan(1440)
+    const both = await (
+      await page.request.get(origin + '/__fixture/status')
+    ).json()
+    expect(both.leases).toHaveLength(2)
+    const secondLease = both.leases.find(
+      (lease: { id: string }) => lease.id !== firstLease
+    ).id
+    expect(both.profiles.sort()).toEqual([firstLease, secondLease].sort())
+    await expect.poll(() => nativeZoom(secondLease)).toBeGreaterThan(0)
+    const secondZoom = (await nativeZoom(secondLease))!
+    expect(secondZoom).not.toBe(await nativeZoom(firstLease))
+    await expect.poll(() => secondStreams.size).toBe(1)
+    console.log(
+      JSON.stringify({
+        host: 'local Docker synthetic',
+        concurrentUsers: 2,
+        otherUserFirstDecodedFrameMs: Date.now() - warmStart,
+        profilesIsolated: true,
+        ctrlMetaPinchZoomVerified: true
+      })
+    )
+    await page.getByRole('button', { name: '登出', exact: true }).click()
+    await expect(page.locator('iframe')).toHaveCount(0)
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get(origin + '/__fixture/status')).json())
+            .profiles
+      )
+      .toEqual([secondLease])
+    await expect(secondVideo).toBeVisible()
+    const secondBox = await secondVideo.boundingBox()
+    expect(secondBox).not.toBeNull()
+    await secondPage.mouse.move(
+      secondBox!.x + secondBox!.width / 2,
+      secondBox!.y + secondBox!.height / 2
+    )
+    await secondPage.keyboard.down('Control')
+    await secondPage.mouse.wheel(0, -120)
+    await secondPage.keyboard.up('Control')
+    await expect.poll(() => nativeZoom(secondLease)).toBeGreaterThan(secondZoom)
+    expect(requests.some((url) => /\/(scene|content)(?:\?|$)/.test(url))).toBe(
+      false
+    )
+    await secondPage.getByRole('button', { name: '登出', exact: true }).click()
+    await expect(secondPage.locator('iframe')).toHaveCount(0)
+    await expect(
+      secondPage.getByRole('link', { name: 'Google Workspace 登入' })
+    ).toBeVisible()
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get(origin + '/__fixture/status')).json())
+            .profiles
+      )
+      .toEqual([])
+    const final = await (
+      await page.request.get(origin + '/__fixture/status')
+    ).json()
+    expect(final.sourceHash).toBe(before.sourceHash)
+    expect(final.sourceMtime).toBe(before.sourceMtime)
+  } finally {
+    await secondContext.close()
+  }
 })

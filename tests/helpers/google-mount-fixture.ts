@@ -33,8 +33,9 @@ export async function createGoogleFixture(
     viewerMode?: 'raster' | 'selkies'
     mode?: 'read-only' | 'session-edit'
     sourceRoot?: string
-    remoteWorker?: RemoteWorker
+    remoteWorker?: (slot: number) => RemoteWorker
     withThumbnail?: boolean
+    maxSessions?: number
   } = {}
 ) {
   const source = resolve(base, 'source'),
@@ -65,6 +66,7 @@ export async function createGoogleFixture(
             runtimePath: resolve(base, 'remote'),
             appPort: 8085,
             streamPort: 8086,
+            maxSessions: options.maxSessions ?? 4,
             maxWidth: 1920,
             maxHeight: 1080,
             maxPixels: 2073600,

@@ -16,6 +16,10 @@ const schema = v.strictObject({
       runtimePath: nonempty,
       appPort: v.literal(8085),
       streamPort: v.literal(8086),
+      maxSessions: v.optional(
+        v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(8)),
+        4
+      ),
       maxWidth: v.pipe(
         v.number(),
         v.integer(),
@@ -91,7 +95,8 @@ export function parseConfig(raw: unknown): Config {
       !config.remote.runtimePath.startsWith('/') ||
       config.remote.runtimePath === '/' ||
       config.remote.appPort === config.port ||
-      config.remote.streamPort === config.port)
+      (config.port >= config.remote.streamPort &&
+        config.port < config.remote.streamPort + config.remote.maxSessions))
   )
     throw new Error(
       'selkies requires google-mount and isolated local runtime/ports'

@@ -42,17 +42,21 @@ Dockerfile 使用 LSIO 映像作為元件來源，覆寫 entrypoint，以 `10001
 
 ## 資料與連線邊界
 
+多人模式依容量建立X11 `:1`–`:8` 與loopback串流8086–8093，private app共用loopback8085。第一次開檔的解析依序執行，同一revision可共用有上限的唯讀scene cache。此模式提供各自操作文件，沒有共同編輯或原檔儲存。提高容量前，依實際文件大小量測記憶體、CPU／encoder、`shm_size`與`pids_limit`；預設4是併發限制，四人使用大檔的Unraid／GPU效能仍需現場驗證。
+
+游標在遠端畫布上時，Ctrl＋滾輪或macOS Command＋滾輪可縮放，觸控板的Ctrl-wheel事件也會補送修飾鍵至原生畫布。一般滾輪與平移仍由Selkies處理。操作員更新一般CI映像並重建容器後即生效；舊config可省略`maxSessions`，使用預設4。
+
 ```mermaid
 flowchart LR
   B[使用者瀏覽器] -->|HTTPS：Google 登入、文件列表| P[Portal :3000]
   B -->|已驗證 WebSocket：H.264 畫面與操作| P
-  P -->|loopback :8086| S[Selkies / X11]
+  P -->|loopback :8086–8093| S[每人獨立 Selkies / X11]
   S --> C[獨立 profile 的 Chromium]
   C -->|loopback :8085：短效內部 ticket| A[原生會話 adapter]
   A -->|受控唯讀開檔| N[指定 NAS CIFS / NFS 目錄]
 ```
 
-外部 `/scene`、`/content` 繼續回應 410。內部文件路由只存在另一個 loopback listener；公開 listener 的 `/_remote/*`、`/remote-desktop` 回應 404。內部 ticket 與活動會話、Portal session、文件 revision 綁定，讀取前後重新驗證。不能把 8085、8086 發布到主機或代理。
+外部 `/scene`、`/content` 繼續回應 410。內部文件路由只存在另一個 loopback listener；公開 listener 的 `/_remote/*`、`/remote-desktop` 回應 404。內部 ticket 與活動會話、Portal session、文件 revision 綁定，讀取前後重新驗證。不能把 8085 或 8086–8093 發布到主機或代理。
 
 外部瀏覽器使用官方 Selkies core 解碼 H.264；不解析 FIG、不接收 scene、不建立 OpenPencil 文件 graph。原生 UI 在伺服器 Chromium 内運作，切頁、縮放與平移使用保留的 renderer、圖片與字體狀態。內部 scene cache 有 64MiB 上限，超過上限的文件在重新建立會話時可能重新解析；現有原生圖片 cache 上限沿用 adapter，不是整個程序或 VRAM 上限。
 
@@ -77,7 +81,7 @@ docker compose --env-file .env -f compose.unraid.yml -f compose.gpu.yml config
 docker compose --env-file .env -f compose.unraid.yml -f compose.gpu.yml up -d --force-recreate
 ```
 
-Compose 使用 root filesystem readonly、cap_drop ALL、no-new-privileges、數值 non-root（Unraid 預設99:100）、私有 IPC、512MiB `/tmp`、1GiB `/dev/shm`、12GiB RAM、512 pids。Portal／Chromium 不取得 Docker socket。需要更多大文件記憶體時由操作員按量測調整 mem_limit，不因此變更 NAS mount。
+Compose 使用 root filesystem readonly、cap_drop ALL、no-new-privileges、數值 non-root（Unraid 預設99:100）、私有 IPC、512MiB `/tmp`、1GiB `/dev/shm`、12GiB RAM、1024 pids。Portal／Chromium 不取得 Docker socket。需要更多大文件記憶體時由操作員按量測調整 mem_limit，不因此變更 NAS mount。
 
 操作員也可選用 Unraid 常用的 `nobody:users` 數值身份 `99:100`：Docker CLI 將 `--user 10001:10001` 改為 `--user 99:100`，Compose 將 `user` 改為 `'99:100'`，並重建容器。此映像直接啟動 Node，沒有處理 `PUID`／`PGID` 的 root init；僅設定這兩個環境變數不會切換身份。專用本機 state 及其既有資料需屬於選定 UID，config／OAuth／NAS 來源需讓該身份可讀，DRM supplementary groups 仍須保留。`99:100` 的本機合成 SQLite 建立、`chmod 0600`、WAL 讀寫已驗證；完整 Unraid Chromium／GPU 會話仍待實機驗證。
 
@@ -247,7 +251,7 @@ Unraid手動量測每個檔案至少冷開、同會話切頁與連續縮放／�
 
 ## 會話、編輯與來源完整性驗收
 
-第一階段一個活動会话，其他帳號得到明確忙碌提示。每次新會話有獨立Chromium profile、X display與encoder。stream cookie有效90秒，與Portal session及lease綁定；每30秒renew不延長Portal idle expiry。WS握手驗證Origin／雙cookie，1秒watchdog檢查session/文件/worker；斷線15秒清理。登出／撤銷／到期會終止stream，TERM/KILL子程序並刪除profile。不能把不同使用者共用同一Chromium畫面。
+`remote.maxSessions` 省略時預設4，允許1–8；設為1可回復單人容量。每個Portal登入工作階段最多開一份文件。每次新會話有獨立Chromium profile、X display與encoder；不同使用者可同時開同一份FIG，各自縮放、平移與暫存修改互不影響。stream cookie有效90秒，與Portal session及lease綁定；每30秒renew不延長Portal idle expiry。WS握手驗證Origin／雙cookie，1秒watchdog檢查session/文件/worker；斷線15秒清理。登出／撤銷／到期只終止本人的stream，TERM/KILL子程序並刪除profile。關閉中的slot須等清理完成才可再次使用。
 
 Selkies proxy轉送頁面/zoom/pan操作與ACK；session-edit另允許文字、刪除、undo/redo與編輯快捷鍵，以每條WS的modifier狀態阻擋瀏覽器／桌面逃逸快捷鍵。阻擋命令、剪貼簿、檔案傳輸、音訊、webcam與二進位上傳，其他HTTP路由不代理。Chromiumpolicy停用下載／列印／檔案選擇／DevTools／外部URL／擴充套件。native adapter在read-only保留graph immutability；session-edit保留可變記憶體graph並啟用屬性面板、頁面新增／更名與原生編輯。兩種模式均禁止save/autosave/export/source binding/external document traffic，IndexedDB改成每次會話的記憶體實作，避免上游帳密store初始化錯誤與文件落盤。
 

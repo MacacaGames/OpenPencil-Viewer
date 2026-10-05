@@ -147,7 +147,7 @@ onMounted(async () => {
       const body = await response.json()
       throw new Error(
         body.error === 'remote-busy'
-          ? '目前已有使用者使用遠端畫面，請稍後再試。'
+          ? '遠端會話已達上限，或您已有開啟的會話，請關閉後再試。'
           : '遠端會話無法啟動，請查看伺服器日誌。'
       )
     }

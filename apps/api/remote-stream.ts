@@ -63,7 +63,7 @@ export function attachRemoteStream(
       )
       stage = 'upstream-connect'
       upstream = new WebSocket(
-        portal.remote.worker.streamUrl.replace(/^http/, 'ws') +
+        portal.remote.workerFor(lease).streamUrl.replace(/^http/, 'ws') +
           '/api/websockets',
         {
           origin: config.origin,
@@ -136,12 +136,12 @@ export function attachRemoteStream(
           clearTimeout(verifyTimer)
           client.terminate()
           source.terminate()
-          portal.remote?.connections.delete(close)
+          portal.remote?.connectionsFor(lease)?.delete(close)
           portal.remote?.disconnected(lease)
         }
-        portal.remote!.connections.add(close)
+        portal.remote!.connectionsFor(lease)!.add(close)
         portal.remote!.connected(lease)
-        if (portal.remote!.active !== lease) return close()
+        if (!portal.remote!.has(lease)) return close()
         const inputFilter = createRemoteInput(
           config.remote!,
           config.mode === 'session-edit'

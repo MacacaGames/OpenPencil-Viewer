@@ -55,7 +55,8 @@ test('Google remote: source stays internal, WS binds owner/Origin, logout destro
   }
   const fixture = await createGoogleFixture(base, 3218, {
     viewerMode: 'selkies',
-    remoteWorker: worker
+    maxSessions: 1,
+    remoteWorker: () => worker
   })
   const server = serve({
     fetch: fixture.portal.app.fetch,
@@ -289,7 +290,7 @@ test('Google remote: source stays internal, WS binds owner/Origin, logout destro
     )
     await closed
     assert.equal(stopped, 1)
-    assert.equal(fixture.portal.remote?.active, undefined)
+    assert.equal(fixture.portal.remote?.leases.length, 0)
     assert.equal(
       (await request(lease.url, { headers: { Cookie: cookies } })).status,
       401
@@ -378,6 +379,190 @@ test('Google remote: source stays internal, WS binds owner/Origin, logout destro
     await new Promise<void>((r) => server.close(() => r()))
     for (const connection of upstream.clients) connection.terminate()
     await new Promise<void>((r) => upstream.close(() => r()))
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('Two simultaneous remote users get isolated streams, shared cold parsing, independent logout and per-owner authorization', async () => {
+  const base = realpathSync(mkdtempSync(resolve(tmpdir(), 'portal-multiuser-')))
+  const sources = await Promise.all(
+    [0, 1].map(async () => {
+      const server = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+      await once(server, 'listening')
+      const address = server.address()
+      assert.ok(address && typeof address !== 'string')
+      const received: string[] = []
+      server.on('connection', (socket) =>
+        socket.on('message', (message) => received.push(message.toString()))
+      )
+      return { server, received, url: `http://127.0.0.1:${address.port}` }
+    })
+  )
+  const corePath = resolve(base, 'core.js')
+  writeFileSync(corePath, '/* synthetic */')
+  const stopped: number[] = []
+  const fixture = await createGoogleFixture(base, 3218, {
+    viewerMode: 'selkies',
+    maxSessions: 2,
+    remoteWorker: (slot) => ({
+      corePath,
+      streamUrl: sources[slot].url,
+      start: async (lease) => {
+        mkdirSync(base + '/remote/' + lease.id, { recursive: true })
+      },
+      stop: async () => {
+        stopped.push(slot)
+      }
+    })
+  })
+  const server = serve({
+    fetch: fixture.portal.app.fetch,
+    hostname: '127.0.0.1',
+    port: 0
+  }) as Server
+  if (!server.listening) await once(server, 'listening')
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  fixture.config.origin = `http://127.0.0.1:${address.port}`
+  attachRemoteStream(server, fixture.portal, fixture.config)
+  const request = (path: string, init: RequestInit = {}) =>
+    fixture.portal.app.request(fixture.config.origin + path, init)
+  const login = async (account: string) => {
+    const start = await request('/auth/google/start'),
+      url = new URL(start.headers.get('location')!)
+    const response = await request(
+      '/auth/google/callback?' +
+        new URLSearchParams({
+          state: url.searchParams.get('state')!,
+          code: fixtureCode(url, account)
+        }),
+      { headers: { Cookie: start.headers.getSetCookie()[0].split(';')[0] } }
+    )
+    const cookie = response.headers
+      .getSetCookie()
+      .find((value) => value.startsWith('portal='))!
+      .split(';')[0]
+    const me = await (
+      await request('/api/me', { headers: { Cookie: cookie } })
+    ).json()
+    return {
+      Cookie: cookie,
+      Origin: fixture.config.origin,
+      'X-CSRF-Token': me.csrf
+    }
+  }
+  const clients: WebSocket[] = []
+  try {
+    const headers = await Promise.all(['A', 'B'].map(login))
+    const responses = await Promise.all(
+      headers.map((headers) =>
+        request(`/api/files/${fileId('designs', 'A.fig')}/remote`, {
+          method: 'POST',
+          headers
+        })
+      )
+    )
+    assert.deepEqual(
+      responses.map((response) => response.status),
+      [200, 200]
+    )
+    const leases = await Promise.all(
+      responses.map((response) => response.json())
+    )
+    const cookies = headers.map(
+      (value, index) =>
+        value.Cookie +
+        '; ' +
+        responses[index].headers.getSetCookie()[0].split(';')[0]
+    )
+    assert.equal(fixture.portal.remote!.leases.length, 2)
+    const tickets = fixture.portal.remote!.leases.map((lease) => lease.ticket)
+    const scenes = await Promise.all(
+      tickets.map((ticket) =>
+        fixture.portal.internalApp.request(
+          `http://127.0.0.1/_remote/${ticket}/scene`
+        )
+      )
+    )
+    assert.deepEqual(
+      scenes.map((response) => response.status),
+      [200, 200]
+    )
+    assert.deepEqual(
+      new Uint8Array(await scenes[0].arrayBuffer()),
+      new Uint8Array(await scenes[1].arrayBuffer())
+    )
+    assert.equal(
+      (await request(leases[0].url, { headers: { Cookie: cookies[1] } }))
+        .status,
+      401
+    )
+    for (let index = 0; index < 2; index++) {
+      const client = new WebSocket(
+        fixture.config.origin.replace('http', 'ws') +
+          leases[index].url +
+          'api/websockets',
+        { origin: fixture.config.origin, headers: { Cookie: cookies[index] } }
+      )
+      clients.push(client)
+      await once(client, 'open')
+    }
+    clients[0].send('kd,32')
+    clients[1].send('kd,49')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.deepEqual(
+      sources.map((source) => source.received),
+      [
+        ['_stats,1', 'kd,32'],
+        ['_stats,1', 'kd,49']
+      ]
+    )
+    const closedA = once(clients[0], 'close')
+    assert.equal(
+      (await request('/auth/logout', { method: 'POST', headers: headers[0] }))
+        .status,
+      200
+    )
+    await closedA
+    assert.deepEqual(stopped, [0])
+    assert.equal(clients[1].readyState, WebSocket.OPEN)
+    assert.equal(
+      (
+        await request(`/api/remote/${leases[1].id}/renew`, {
+          method: 'POST',
+          headers: { ...headers[1], Cookie: cookies[1] }
+        })
+      ).status,
+      200
+    )
+    clients[1].send('ku,49')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(sources[1].received.at(-1), 'ku,49')
+    assert.equal(
+      (
+        await fixture.portal.internalApp.request(
+          `http://127.0.0.1/_remote/${tickets[0]}/metadata`
+        )
+      ).status,
+      404
+    )
+    assert.equal(
+      (
+        await fixture.portal.internalApp.request(
+          `http://127.0.0.1/_remote/${tickets[1]}/metadata`
+        )
+      ).status,
+      200
+    )
+  } finally {
+    for (const client of clients) client.terminate()
+    await fixture.portal.remote?.close()
+    fixture.close()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    for (const source of sources) {
+      for (const client of source.server.clients) client.terminate()
+      await new Promise<void>((resolve) => source.server.close(() => resolve()))
+    }
     rmSync(base, { recursive: true, force: true })
   }
 })
