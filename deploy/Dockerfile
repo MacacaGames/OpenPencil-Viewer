@@ -16,7 +16,7 @@ COPY patches ./patches
 COPY scripts ./scripts
 COPY tools ./tools
 # Fetch only the exact locked commit, never a moving branch or local patches.
-RUN git init upstream/open-pencil && git -C upstream/open-pencil remote add origin https://github.com/open-pencil/open-pencil.git \
+RUN git init upstream/open-pencil && git -C upstream/open-pencil remote add origin "$(node -p 'JSON.parse(require("fs").readFileSync("upstream.lock.json")).repository')" \
  && git -C upstream/open-pencil fetch --depth=1 origin "$(node -p 'JSON.parse(require("fs").readFileSync("upstream.lock.json")).sha')" \
  && git -C upstream/open-pencil checkout --detach FETCH_HEAD
 RUN bun install --frozen-lockfile && npm run verify-upstream && npm run build
@@ -51,7 +51,7 @@ COPY deploy/selkies/versions.json /app/versions.json
 LABEL org.opencontainers.image.title="OpenPencil LAN Portal" \
       org.opencontainers.image.version="0.1.0" \
       portal.features="raster,selkies" \
-      portal.upstream.sha="8c72b62da07ea1f7e82de84c7c837c3c78dfbf95"
+      portal.upstream.sha="e4ef22826ff238bba57eeeb7bc769d4a2d355ce1"
 ENV NODE_ENV=production PORTAL_CONFIG=/config/config.json PYTHON_BIN=python3 \
     HOME=/state/remote START_DOCKER=false PIXELFLUX_WAYLAND=false
 USER 10001:10001
