@@ -18,7 +18,7 @@ export function verifyUpstream() {
       'submodule.upstream/open-pencil.url'
     ]) !== lock.repository
   )
-    throw new Error('official upstream URL required')
+    throw new Error('upstream URL differs from lock.repository')
   if (
     output(
       'git',
@@ -26,7 +26,7 @@ export function verifyUpstream() {
       root + '/upstream/open-pencil'
     ) !== lock.repository
   )
-    throw new Error('official upstream origin required')
+    throw new Error('upstream origin differs from lock.repository')
   console.log('upstream pristine, SHA ' + lock.sha)
 }
 if (process.argv[1]?.endsWith('/verify-upstream.ts')) verifyUpstream()

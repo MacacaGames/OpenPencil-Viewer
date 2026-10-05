@@ -172,3 +172,34 @@ test('native Vue commands deny direct run, including delete/paste/undo; view com
     editor.dispose()
   }
 })
+
+test('imported page backgrounds survive readonly page switching without exposing graph values', async () => {
+  const { getPageBackgrounds } =
+    await import('../../.work/editor/packages/core/src/figma-api/page-backgrounds')
+  const graph = new SceneGraph()
+  const second = graph.addPage('Imported page')
+  second.source.fig.rawNodeFields.backgroundColor = {
+    r: 0.2,
+    g: 0.4,
+    b: 0.6,
+    a: 1
+  }
+  const editor = createEditor({
+    graph,
+    skipInitialGraphSetup: true,
+    loadFont: async () => null
+  })
+  lockGraph(graph)
+  try {
+    await editor.switchPage(second.id)
+    expect(editor.state.currentPageId).toBe(second.id)
+    expect(editor.state.pageColor).toEqual({ r: 0.2, g: 0.4, b: 0.6, a: 1 })
+    const page = graph.getNode(second.id)
+    if (!page) throw new Error('Imported page missing')
+    const backgrounds = getPageBackgrounds(page)
+    backgrounds[0].color.r = 0.9
+    expect(getPageBackgrounds(page)[0].color.r).toBe(0.2)
+  } finally {
+    editor.dispose()
+  }
+})

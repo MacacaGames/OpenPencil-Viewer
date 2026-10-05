@@ -21,6 +21,7 @@ test('Mutable remote editor supports property/page/undo edits without persistenc
     }),
     saveFigFile: forbidden,
     saveFigFileAs: forbidden,
+    saveFigFileToPath: forbidden,
     openFigFile: forbidden,
     setDocumentSource: forbidden,
     setStorageDocumentSource: forbidden,
@@ -44,6 +45,7 @@ test('Mutable remote editor supports property/page/undo edits without persistenc
     for (const action of [
       editor.saveFigFile,
       editor.saveFigFileAs,
+      editor.saveFigFileToPath,
       editor.openFigFile,
       editor.setDocumentSource,
       editor.setStorageDocumentSource,

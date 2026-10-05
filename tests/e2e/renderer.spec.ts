@@ -18,7 +18,7 @@ test.beforeAll(() => {
     unlinkSync(script)
   }
 })
-test('viewport image worker renders fit/tile fills across resize, pages and repeated opens', async ({
+test('viewport images render fit/tile fills across resize, pages and repeated opens', async ({
   page
 }) => {
   const errors: string[] = [],
@@ -62,7 +62,7 @@ test('viewport image worker renders fit/tile fills across resize, pages and repe
   ).toBeVisible({ timeout: 75000 })
   await expect(page.getByRole('status')).toHaveCount(0, { timeout: 75000 })
   const scene = page.locator('canvas').first()
-  await expect.poll(() => workers).toBeGreaterThanOrEqual(2)
+  await expect.poll(() => workers).toBeGreaterThanOrEqual(1)
   await expect
     .poll(() =>
       scene.screenshot().then((png) =>

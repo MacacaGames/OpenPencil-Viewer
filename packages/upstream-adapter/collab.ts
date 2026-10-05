@@ -9,6 +9,8 @@ export function disabledCollaboration() {
     state,
     remotePeers: computed(() => state.value.peers),
     followingPeer: ref<number | null>(null),
+    following: ref<null>(null),
+    follow: (_target: unknown) => undefined,
     connect: (_roomId: string) => deny(),
     disconnect: () => undefined,
     shareCurrentDoc: (): string => deny(),

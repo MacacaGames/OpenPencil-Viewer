@@ -55,7 +55,7 @@ await build({
     '@open-pencil/core/io/formats/fig':
       editorRoot + '/packages/core/dist/io/formats/fig/index.js',
     '@open-pencil/core/scene-transfer':
-      editorRoot + '/packages/core/dist/kiwi/fig/parse/transfer.js'
+      editorRoot + '/packages/core/dist/scene-transfer.js'
   },
   nodePaths: [editorRoot + '/node_modules']
 })

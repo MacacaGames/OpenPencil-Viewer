@@ -32,6 +32,7 @@ export function guardAppEditor<T extends { graph: object }>(editor: T): T {
   for (const name of [
     'saveFigFile',
     'saveFigFileAs',
+    'saveFigFileToPath',
     'openFigFile',
     'openDOMFile',
     'setDocumentSource',

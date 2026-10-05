@@ -12,7 +12,6 @@ parentPort?.once('message', async (bytes: ArrayBuffer) => {
     // Export-only archive schema and deferred original-source payload never cross HTTP.
     data.figSchemaDeflated = null
     data.figKiwiVersion = null
-    delete data.lazyFigImport
     const packed = encodeScene({ version: 1, graph: data })
     parentPort?.postMessage({ packed }, [packed.buffer])
   } catch {

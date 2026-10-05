@@ -2,12 +2,12 @@ import { test, expect, mock } from 'bun:test'
 import { SceneGraph } from '@open-pencil/scene-graph'
 import type { CanvasKit } from 'canvaskit-wasm'
 import {
-  DecodedImageCache,
   ImagePreviewCache,
   previewEdge,
   useViewportImageRendering,
   type ImagePreview
-} from '../../.work/editor/portal/upstream-adapter/image-memory'
+} from '../../.work/editor/packages/core/src/canvas/images/previews'
+import { createImageCache } from '../../.work/editor/packages/core/src/canvas/images/cache'
 import { createCanvasRenderLoop } from '../../.work/editor/packages/vue/src/canvas/surface/render-loop'
 import { createEditor } from '@open-pencil/core/editor'
 import { renderSceneToCanvas } from '../../.work/editor/packages/core/src/canvas/renderer/pipeline'
@@ -51,28 +51,26 @@ function image(width = 4, height = 4) {
     deleted: () => deleted
   }
 }
-test('native image LRU accounts for mipmaps and releases each owned handle once', () => {
-  const cache = new DecodedImageCache<ReturnType<typeof image>>(172)
+test('native image LRU accounts for mipmaps and releases owned handles once', () => {
+  const cache = createImageCache<ReturnType<typeof image>>(172)
   const a = image(),
     b = image(),
     c = image(),
     d = image(20, 20)
-  cache.set('a', a).set('b', b)
-  expect(cache.bytes).toBe(172)
+  cache.set('a', a)
+  cache.set('b', b)
+  expect(cache.weight).toBe(172)
   cache.get('a')
   cache.set('c', c)
   expect(b.deleted()).toBe(1)
   expect(a.deleted()).toBe(0)
-  cache.set('a', a)
-  cache.set('a', d)
-  expect(a.deleted()).toBe(1)
-  expect(c.deleted()).toBe(1)
-  expect(cache.size).toBe(1)
+  expect(cache.set('oversized', d)).toBe(false)
   expect(d.deleted()).toBe(0)
   cache.clear()
   cache.clear()
-  expect(d.deleted()).toBe(1)
-  expect(cache.bytes).toBe(0)
+  expect(a.deleted()).toBe(1)
+  expect(c.deleted()).toBe(1)
+  expect(cache.weight).toBe(0)
 })
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0))

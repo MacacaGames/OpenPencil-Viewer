@@ -61,12 +61,7 @@ async function open(bytes: ArrayBuffer): Promise<ViewerManifest> {
   const pages = document.getPages()
   if (!pages.length || pages.length > 10000) throw new Error('pages-limit')
   for (const page of pages) {
-    const restore = await renderer.prepareForExport(
-      graph,
-      page.id,
-      page.childIds
-    )
-    restore()
+    await renderer.prepareForExport(graph, page.id, page.childIds)
   }
   const manifest: ViewerManifest = {
     version: 1,
@@ -126,8 +121,6 @@ function render(view: ViewportRequest): Uint8Array {
     surface.delete()
     // Rendering caches must not retain every decoded image across navigation.
     renderer.invalidateAllPictures()
-    if (!('bytes' in renderer.imageCache))
-      for (const image of renderer.imageCache.values()) image.delete()
     renderer.imageCache.clear()
   }
 }
