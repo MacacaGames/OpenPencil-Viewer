@@ -1,4 +1,4 @@
-import test from 'node:test'
+import test, { type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   mkdtempSync,
@@ -14,7 +14,7 @@ import { resolve } from 'node:path'
 import type { Server } from 'node:http'
 import { serve } from '@hono/node-server'
 import { WebSocket, WebSocketServer } from 'ws'
-import { once } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import type { RemoteLease } from '../../apps/api/remote-sessions.ts'
 import { attachRemoteStream } from '../../apps/api/remote-stream.ts'
 import {
@@ -383,7 +383,15 @@ test('Google remote: source stays internal, WS binds owner/Origin, logout destro
   }
 })
 
-test('Two simultaneous remote users get isolated streams, shared cold parsing, independent logout and per-owner authorization', async () => {
+for (const firstUser of [0, 1]) {
+  test(
+    `Two simultaneous remote users get isolated streams, shared cold parsing, independent logout and per-owner authorization (${firstUser === 0 ? 'A' : 'B'} reserves first)`,
+    { timeout: 15000 },
+    (t) => testConcurrentSessions(t, firstUser)
+  )
+}
+
+async function testConcurrentSessions(t: TestContext, firstUser: number) {
   const base = realpathSync(mkdtempSync(resolve(tmpdir(), 'portal-multiuser-')))
   const sources = await Promise.all(
     [0, 1].map(async () => {
@@ -392,10 +400,24 @@ test('Two simultaneous remote users get isolated streams, shared cold parsing, i
       const address = server.address()
       assert.ok(address && typeof address !== 'string')
       const received: string[] = []
+      const packets = new EventEmitter()
       server.on('connection', (socket) =>
-        socket.on('message', (message) => received.push(message.toString()))
+        socket.on('message', (message) => {
+          received.push(message.toString())
+          packets.emit('message')
+        })
       )
-      return { server, received, url: `http://127.0.0.1:${address.port}` }
+      const waitFor = async (message: string) => {
+        const signal = AbortSignal.timeout(5000)
+        while (!received.includes(message))
+          await once(packets, 'message', { signal })
+      }
+      return {
+        server,
+        received,
+        waitFor,
+        url: `http://127.0.0.1:${address.port}`
+      }
     })
   )
   const corePath = resolve(base, 'core.js')
@@ -454,6 +476,24 @@ test('Two simultaneous remote users get isolated streams, shared cold parsing, i
   const clients: WebSocket[] = []
   try {
     const headers = await Promise.all(['A', 'B'].map(login))
+    // Exercise both reservation orders while responses still follow A/B order.
+    const remote = fixture.portal.remote!
+    const create = remote.create.bind(remote)
+    let releaseFirst!: () => void
+    const reservedFirst = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    const firstCookie = headers[firstUser].Cookie.slice('portal='.length)
+    t.mock.method(
+      remote,
+      'create',
+      async (...args: Parameters<typeof create>) => {
+        if (args[1] !== firstCookie) await reservedFirst
+        const pending = create(...args)
+        if (args[1] === firstCookie) releaseFirst()
+        return pending
+      }
+    )
     const responses = await Promise.all(
       headers.map((headers) =>
         request(`/api/files/${fileId('designs', 'A.fig')}/remote`, {
@@ -476,7 +516,17 @@ test('Two simultaneous remote users get isolated streams, shared cold parsing, i
         responses[index].headers.getSetCookie()[0].split(';')[0]
     )
     assert.equal(fixture.portal.remote!.leases.length, 2)
-    const tickets = fixture.portal.remote!.leases.map((lease) => lease.ticket)
+    const sessions = leases.map(({ id }) => {
+      const session = remote.leases.find((lease) => lease.id === id)
+      assert.ok(session)
+      return session
+    })
+    assert.deepEqual(
+      sessions.map((lease) => lease.slot),
+      firstUser === 0 ? [0, 1] : [1, 0]
+    )
+    const streams = sessions.map((lease) => sources[lease.slot])
+    const tickets = sessions.map((lease) => lease.ticket)
     const scenes = await Promise.all(
       tickets.map((ticket) =>
         fixture.portal.internalApp.request(
@@ -502,16 +552,22 @@ test('Two simultaneous remote users get isolated streams, shared cold parsing, i
         fixture.config.origin.replace('http', 'ws') +
           leases[index].url +
           'api/websockets',
-        { origin: fixture.config.origin, headers: { Cookie: cookies[index] } }
+        {
+          origin: fixture.config.origin,
+          headers: { Cookie: cookies[index] }
+        }
       )
       clients.push(client)
       await once(client, 'open')
     }
     clients[0].send('kd,32')
     clients[1].send('kd,49')
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await Promise.all([
+      streams[0].waitFor('kd,32'),
+      streams[1].waitFor('kd,49')
+    ])
     assert.deepEqual(
-      sources.map((source) => source.received),
+      streams.map((source) => source.received),
       [
         ['_stats,1', 'kd,32'],
         ['_stats,1', 'kd,49']
@@ -519,12 +575,16 @@ test('Two simultaneous remote users get isolated streams, shared cold parsing, i
     )
     const closedA = once(clients[0], 'close')
     assert.equal(
-      (await request('/auth/logout', { method: 'POST', headers: headers[0] }))
-        .status,
+      (
+        await request('/auth/logout', {
+          method: 'POST',
+          headers: headers[0]
+        })
+      ).status,
       200
     )
     await closedA
-    assert.deepEqual(stopped, [0])
+    assert.deepEqual(stopped, [sessions[0].slot])
     assert.equal(clients[1].readyState, WebSocket.OPEN)
     assert.equal(
       (
@@ -536,8 +596,9 @@ test('Two simultaneous remote users get isolated streams, shared cold parsing, i
       200
     )
     clients[1].send('ku,49')
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    assert.equal(sources[1].received.at(-1), 'ku,49')
+    await streams[1].waitFor('ku,49')
+    assert.equal(streams[1].received.at(-1), 'ku,49')
+    assert.deepEqual(streams[0].received, ['_stats,1', 'kd,32'])
     assert.equal(
       (
         await fixture.portal.internalApp.request(
@@ -565,4 +626,4 @@ test('Two simultaneous remote users get isolated streams, shared cold parsing, i
     }
     rmSync(base, { recursive: true, force: true })
   }
-})
+}
