@@ -47,7 +47,7 @@ services:
       - /run:rw,noexec,nosuid,nodev,size=32m,mode=1777
     shm_size: 1gb
     mem_limit: 12g
-    pids_limit: 1024
+    pids_limit: 4096
     stop_grace_period: 30s
     logging:
       driver: json-file

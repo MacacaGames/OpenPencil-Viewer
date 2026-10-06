@@ -296,6 +296,9 @@ export function createPortal(
             const { session, principal } = await identify(lease.cookie, false)
             if (session.id !== lease.owner)
               throw new AppError('remote-expired', 401)
+            if (googlePrincipal(session.identity).key !== lease.account)
+              throw new AppError('remote-expired', 401)
+            if (!lease.file) return
             const record = await authorize(principal, lease.file.id)
             if (record.revision !== lease.file.revision)
               throw new AppError('source-changed', 409)
@@ -303,7 +306,11 @@ export function createPortal(
           },
           Date.now,
           config.remote!.maxSessions,
-          config.remote!.disconnectGraceMs
+          config.remote!.disconnectGraceMs,
+          {
+            maxSessionsPerAccount: config.remote!.maxSessionsPerAccount,
+            blankPrewarmIdleMs: config.remote!.blankPrewarmIdleMs
+          }
         )
       : undefined
   const internalApp = new Hono()
@@ -325,8 +332,9 @@ export function createPortal(
     const lease = await remote?.internal(c.req.param('ticket'))
     if (!lease) throw new AppError('not-found', 404)
     return c.json({
-      name: lease.file.name,
-      revision: lease.file.revision,
+      name: lease.file?.name ?? '空白會話',
+      revision: lease.file?.revision,
+      empty: !lease.file,
       generation: lease.generation,
       mode: config.mode,
       display: lease.display
@@ -340,8 +348,9 @@ export function createPortal(
   internalApp.get('/_remote/:ticket/scene', async (c) => {
     const lease = await remote?.internal(c.req.param('ticket'))
     if (!lease) throw new AppError('not-found', 404)
-    const record = lease.file,
-      key = record.id + ':' + record.revision
+    const record = lease.file
+    if (!record) throw new AppError('not-found', 404)
+    const key = record.id + ':' + record.revision
     const generation = lease.generation
     if (
       c.req.query('generation') &&
@@ -517,6 +526,12 @@ export function createPortal(
       mode: config.mode,
       allowClientEditor: config.allowClientEditor,
       maxSessions: config.remote?.maxSessions,
+      maxSessionsPerAccount: config.remote
+        ? Math.min(
+            config.remote.maxSessions,
+            config.remote.maxSessionsPerAccount
+          )
+        : undefined,
       viewer:
         config.viewerMode === 'selkies'
           ? 'selkies'
@@ -634,6 +649,61 @@ export function createPortal(
       throw new AppError('invalid-display', 413)
     }
   })
+  app.get('/api/remote/status', async (c) => {
+    const { session } = await identify(getCookie(c, cookieName), false)
+    if (!remote) throw new AppError('remote-disabled', 404)
+    return c.json(remote.capacityFor(googlePrincipal(session.identity).key))
+  })
+  app.post('/api/remote-tab/:tab/warm', displayBody, async (c) => {
+    if (!remote) throw new AppError('remote-disabled', 404)
+    requireOrigin(c.req.header('Origin'))
+    const cookie = getCookie(c, cookieName)
+    const { session } = await identify(cookie)
+    if (c.req.header('X-CSRF-Token') !== session.csrf)
+      throw new AppError('csrf-rejected', 403)
+    const tab = c.req.param('tab'),
+      data = await c.req.json()
+    if (
+      !/^[a-f0-9-]{36}$/.test(tab) ||
+      !Number.isSafeInteger(data?.request) ||
+      data.request < 1
+    )
+      throw new AppError('invalid-tab', 400)
+    let display
+    try {
+      const { request: _request, ...input } = data
+      display = remoteDisplay(input, config.remote!)
+    } catch {
+      throw new AppError('invalid-display', 400)
+    }
+    const cancelOpen = () =>
+      void remote.stopTab(session.id, tab, data.request).catch(() => undefined)
+    if (c.req.raw.signal.aborted) {
+      cancelOpen()
+      throw new AppError('remote-superseded', 409)
+    }
+    c.req.raw.signal.addEventListener('abort', cancelOpen, { once: true })
+    let lease
+    try {
+      lease = await remote.warmTab(
+        session.id,
+        cookie!,
+        display,
+        tab,
+        data.request,
+        googlePrincipal(session.identity).key
+      )
+    } finally {
+      c.req.raw.signal.removeEventListener('abort', cancelOpen)
+    }
+    setCookie(c, streamCookie(lease.id), lease.credential, streamCookieOptions)
+    return c.json({
+      id: lease.id,
+      url: `/stream/${lease.id}/`,
+      expires: lease.expires,
+      display: lease.display
+    })
+  })
   app.post('/api/files/:id/remote', displayBody, async (c) => {
     if (!remote) throw new AppError('remote-disabled', 404)
     requireOrigin(c.req.header('Origin'))
@@ -685,14 +755,23 @@ export function createPortal(
     try {
       lease =
         tab === undefined
-          ? await remote.create(session.id, cookie!, record, display)
+          ? await remote.create(
+              session.id,
+              cookie!,
+              record,
+              display,
+              undefined,
+              undefined,
+              googlePrincipal(session.identity).key
+            )
           : await remote.openTab(
               session.id,
               cookie!,
               record,
               display,
               tab,
-              request
+              request,
+              googlePrincipal(session.identity).key
             )
     } finally {
       c.req.raw.signal.removeEventListener('abort', cancelOpen)
@@ -748,7 +827,8 @@ export function createPortal(
     const lease = await remote.access(
       c.req.param('id'),
       session.id,
-      getCookie(c, streamCookie(c.req.param('id')))
+      getCookie(c, streamCookie(c.req.param('id'))),
+      false
     )
     if (c.req.param('action') === 'display') {
       try {

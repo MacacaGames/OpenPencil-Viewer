@@ -4,7 +4,7 @@ import { createTab } from '@/app/tabs'
 import { useKeyboard } from '@/app/shell/keyboard/use'
 import EditorWorkspace from '@/components/editor/EditorWorkspace.vue'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
-import { loadScene } from './editor'
+import { loadScene, loadEmpty } from './editor'
 import { readDownload } from '../transport/download'
 import { MAX_SCENE_BYTES, SCENE_TYPE } from '../transport/scene-wire'
 import type { RemoteDisplay } from '../contracts/remote-display'
@@ -66,6 +66,7 @@ onMounted(async () => {
       revision: string
       mode: string
       generation: number
+      empty: boolean
       display?: RemoteDisplay
     } = await metadataResponse.json()
     generation = metadata.generation
@@ -73,36 +74,42 @@ onMounted(async () => {
     applyDisplay()
     window.addEventListener('resize', applyDisplay)
     displayTimer = setInterval(() => void syncDisplay(), 500)
-    editable.value = metadata.mode === 'session-edit'
-    const response = await fetch(path + '/scene?generation=' + generation, {
-      signal: abort.signal,
-      cache: 'no-store'
-    })
-    if (
-      response.headers.get('Content-Type') !== SCENE_TYPE ||
-      response.headers.get('X-Document-Revision') !== metadata.revision
-    )
-      throw new Error('來源無法讀取')
-    const bytes = await readDownload(
-      response,
-      Number(response.headers.get('Content-Length')),
-      MAX_SCENE_BYTES,
-      abort.signal,
-      () => undefined
-    )
-    await loadScene(
-      editor,
-      bytes,
-      metadata.name,
-      abort.signal,
-      (phase) => {
+    editable.value = !metadata.empty && metadata.mode === 'session-edit'
+    if (metadata.empty) {
+      await loadEmpty(editor, abort.signal, (phase) => {
         progress.value = phase
-      },
-      (phase, elapsedMs) => {
-        timings[phase] = elapsedMs
-      },
-      editable.value
-    )
+      })
+    } else {
+      const response = await fetch(path + '/scene?generation=' + generation, {
+        signal: abort.signal,
+        cache: 'no-store'
+      })
+      if (
+        response.headers.get('Content-Type') !== SCENE_TYPE ||
+        response.headers.get('X-Document-Revision') !== metadata.revision
+      )
+        throw new Error('來源無法讀取')
+      const bytes = await readDownload(
+        response,
+        Number(response.headers.get('Content-Length')),
+        MAX_SCENE_BYTES,
+        abort.signal,
+        () => undefined
+      )
+      await loadScene(
+        editor,
+        bytes,
+        metadata.name,
+        abort.signal,
+        (phase) => {
+          progress.value = phase
+        },
+        (phase, elapsedMs) => {
+          timings[phase] = elapsedMs
+        },
+        editable.value
+      )
+    }
     progress.value = ''
     await fetch(path + '/ready', {
       method: 'POST',

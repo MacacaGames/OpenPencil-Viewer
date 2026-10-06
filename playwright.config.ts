@@ -56,6 +56,14 @@ export default defineConfig({
       url: 'http://127.0.0.1:3215/health/ready',
       reuseExistingServer: false,
       timeout: 30000
+    },
+    {
+      command: 'node --import tsx tests/e2e/remote-server.ts',
+      cwd: import.meta.dirname,
+      url: 'http://127.0.0.1:3216/health/ready',
+      reuseExistingServer: false,
+      timeout: 30000,
+      env: { PORTAL_TEST_REMOTE_PORT: '3216' }
     }
   ],
   reporter: [['list'], ['json', { outputFile: 'test-results/report.json' }]]

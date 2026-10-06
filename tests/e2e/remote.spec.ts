@@ -43,6 +43,33 @@ test('Remote browser receives no graph; private native session edits remain in m
     })
   )
   await login(page)
+  await expect
+    .poll(async () =>
+      (
+        await (await page.request.get(origin + '/__fixture/status')).json()
+      ).leases.map((lease: { file?: string; ready: boolean }) => ({
+        file: lease.file,
+        ready: lease.ready
+      }))
+    )
+    .toEqual([{ file: undefined, ready: true }])
+  const lease = await (
+    await page.request.get(origin + '/__fixture/lease')
+  ).json()
+  const initialState = await (
+    await page.request.get(origin + '/__fixture/status')
+  ).json()
+  const internalContext = await browser.newContext()
+  const native = await internalContext.newPage()
+  const privateRequests: string[] = []
+  native.on('request', (request) => privateRequests.push(request.url()))
+  await native.goto(
+    'http://127.0.0.1:8085/remote-desktop?ticket=' + lease.ticket
+  )
+  await expect(native.getByRole('status')).toHaveCount(0, { timeout: 60000 })
+  await expect(native.getByTestId('pages-item')).toHaveCount(1)
+  await expect(native.getByTestId('pages-add')).toBeDisabled()
+  expect(privateRequests.some((url) => /\/scene(?:\?|$)/.test(url))).toBe(false)
   await page.getByRole('button', { name: /^A.fig/ }).dblclick()
   const iframe = page.frameLocator('iframe[title="OpenPencil 遠端畫面"]')
   await expect(iframe.locator('#synthetic-stream')).toBeVisible()
@@ -96,14 +123,6 @@ test('Remote browser receives no graph; private native session edits remain in m
       iframe.locator('canvas').evaluate((c) => (c as HTMLCanvasElement).width)
     )
     .toBeLessThanOrEqual(1200)
-  const lease = await (
-    await page.request.get(origin + '/__fixture/lease')
-  ).json()
-  const internalContext = await browser.newContext()
-  const native = await internalContext.newPage()
-  await native.goto(
-    'http://127.0.0.1:8085/remote-desktop?ticket=' + lease.ticket
-  )
   await expect(native.locator('canvas').first()).toBeVisible()
   await expect(native.getByRole('status')).toHaveCount(0, { timeout: 60000 })
   const initialFont = await native.evaluate(() =>
@@ -162,6 +181,31 @@ test('Remote browser receives no graph; private native session edits remain in m
   await expect(native.getByTestId('pages-item').last()).toHaveText(
     'Temporary session page'
   )
+  const stateBeforeMode = await (
+    await page.request.get(origin + '/__fixture/status')
+  ).json()
+  await page.getByRole('combobox', { name: '開啟方式' }).selectOption('client')
+  await expect(page.getByTestId('client-edit-notice')).toBeVisible({
+    timeout: 60000
+  })
+  await expect(page.locator('iframe')).toHaveCount(0)
+  await expect(native.getByTestId('pages-item')).toHaveCount(3)
+  // The client editor starts from FIG; the parked server graph retains its own edits.
+  await expect(page.getByTestId('pages-item')).toHaveCount(2)
+  await page.getByRole('combobox', { name: '開啟方式' }).selectOption('server')
+  await expect(iframe.locator('#synthetic-stream')).toBeVisible()
+  await expect(native.getByTestId('pages-item').last()).toHaveText(
+    'Temporary session page'
+  )
+  const stateAfterMode = await (
+    await page.request.get(origin + '/__fixture/status')
+  ).json()
+  expect(stateAfterMode.leases[0].id).toBe(initialState.leases[0].id)
+  expect(stateAfterMode.leases[0].generation).toBe(
+    stateBeforeMode.leases[0].generation
+  )
+  expect(stateAfterMode.reloads).toBe(stateBeforeMode.reloads)
+  expect(stateAfterMode.starts).toBe(initialState.starts)
   await native.keyboard.press('ControlOrMeta+s')
   await native.reload()
   await expect(native.getByRole('status')).toHaveCount(0, { timeout: 60000 })

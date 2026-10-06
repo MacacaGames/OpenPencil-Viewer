@@ -8,6 +8,15 @@ const props = defineProps<{
   csrf: string
   editable: boolean
   tab: string
+  active: boolean
+  prewarm: boolean
+  revision: string
+  retry: number
+}>()
+const emit = defineEmits<{
+  change: []
+  busy: [documentId: string, reason: 'server' | 'account']
+  warmReleased: []
 }>()
 const frame = ref<HTMLIFrameElement | null>(null),
   container = ref<HTMLDivElement | null>(null),
@@ -17,10 +26,12 @@ const frame = ref<HTMLIFrameElement | null>(null),
   error = ref(''),
   progress = ref('伺服器準備會話')
 let lease = '',
+  blank = false,
   timer: ReturnType<typeof setInterval> | undefined,
   disposed = false
 let request = 0,
-  opening = false
+  opening = false,
+  desired = ''
 let observer: ResizeObserver | undefined,
   resizeTimer: ReturnType<typeof setTimeout> | undefined,
   display: RemoteDisplay | undefined,
@@ -64,6 +75,22 @@ function fullscreen() {
 }
 function requestedDisplay() {
   const size = viewport.value?.getBoundingClientRect()
+  // Hidden/prewarming canvases keep a useful native size for renderer preparation.
+  if (!size || size.width < 64 || size.height < 64) {
+    if (display)
+      return {
+        width: display.cssWidth,
+        height: display.cssHeight,
+        dpr: devicePixelRatio || 1,
+        uiScale: uiScale.value
+      }
+    return {
+      width: innerWidth,
+      height: Math.max(480, innerHeight - 96),
+      dpr: devicePixelRatio || 1,
+      uiScale: uiScale.value
+    }
+  }
   return {
     width: Math.max(64, Math.min(8192, Math.round(size?.width ?? innerWidth))),
     height: Math.max(
@@ -88,7 +115,7 @@ function fitScreen() {
   send({ type: 'settings', settings: { scaling_dpi: display.dpi } })
 }
 async function syncDisplay() {
-  if (!lease || disposed || opening) return
+  if (!lease || disposed || opening || !props.active) return
   const size = viewport.value?.getBoundingClientRect()
   // The file list hides this retained stream; keep its native canvas renderable.
   if (!size || size.width < 64 || size.height < 64) return
@@ -145,24 +172,42 @@ onMounted(() => {
   window.addEventListener('resize', queueResize)
   observer = new ResizeObserver(queueResize)
   if (viewport.value) observer.observe(viewport.value)
-  void openDocument()
+  void syncSession()
 })
 watch(
-  () => props.documentId,
-  () => void openDocument()
+  () => [
+    props.documentId,
+    props.revision,
+    props.active,
+    props.prewarm,
+    props.retry
+  ],
+  () => void syncSession()
 )
-async function openDocument() {
-  if (!props.documentId || disposed) return
-  if (opening && request) void release(request)
+async function syncSession() {
+  if (disposed) return
+  const file = props.active && props.documentId ? props.documentId : ''
+  if (!file && !props.prewarm && !lease && !opening) return
+  const next = `${file ? `${file}:${props.revision}` : 'park'}:${props.retry}`
+  if (next === desired) return
+  desired = next
+  if (!file) url.value = ''
   const sequence = nextTabRequest(props.tab, request)
   request = sequence
   opening = true
   clearInterval(timer)
   error.value = ''
-  progress.value = lease ? '切換文件' : '伺服器準備會話'
+  progress.value = file
+    ? lease
+      ? '準備文件'
+      : '伺服器準備會話'
+    : '預熱空白會話'
+  emit('change')
   try {
     const response = await fetch(
-      `/api/files/${encodeURIComponent(props.documentId)}/remote`,
+      file
+        ? `/api/files/${encodeURIComponent(file)}/remote`
+        : `/api/remote-tab/${props.tab}/warm`,
       {
         method: 'POST',
         credentials: 'same-origin',
@@ -172,45 +217,79 @@ async function openDocument() {
         },
         body: JSON.stringify({
           ...requestedDisplay(),
-          tab: props.tab,
+          ...(file ? { tab: props.tab } : {}),
           request: sequence
         })
       }
     )
     if (!response.ok) {
       const body = await response.json()
+      const accountLimit = body.error === 'remote-account-limit'
+      const busy =
+        response.status === 429 &&
+        (body.error === 'remote-busy' || accountLimit)
+      if (busy && !disposed && sequence === request)
+        emit('busy', file, accountLimit ? 'account' : 'server')
       throw new Error(
-        body.error === 'remote-busy'
-          ? '遠端會話已達上限，請關閉其他分頁的遠端會話後再試。'
+        busy
+          ? accountLimit
+            ? '此帳號的伺服器會話已達上限，請關閉其他裝置或分頁的會話後再試。'
+            : '遠端會話已達上限，請關閉其他分頁的遠端會話後再試。'
           : '遠端會話無法啟動，請查看伺服器日誌。'
       )
     }
     const result: { id: string; url: string; display: RemoteDisplay } =
       await response.json()
-    if (disposed || sequence !== request) {
+    if (disposed) {
       void release(sequence, true)
       return
     }
+    // A newer queued request owns the same warm worker; do not retire it here.
+    if (sequence !== request) return
+    blank = result.id === lease ? blank && !file : !file
     lease = result.id
     display = result.display
-    url.value = result.url
+    url.value = file && props.active ? result.url : ''
     queueResize()
     progress.value = ''
+    emit('change')
     timer = setInterval(async () => {
+      const renewing = lease
       try {
-        if (!(await action('renew')).ok) throw new Error('expired')
+        const response = await action('renew')
+        if (!response.ok) {
+          if (
+            blank &&
+            response.status === 401 &&
+            lease === renewing &&
+            !opening &&
+            !disposed
+          )
+            emit('warmReleased')
+          throw new Error('expired')
+        }
       } catch {
-        error.value = '會話已到期或來源不可用，請重新開啟文件。'
-        dispose()
+        if (disposed || opening || lease !== renewing) return
+        clearInterval(timer)
+        url.value = ''
+        lease = ''
+        desired = ''
+        void release(request, true)
+        error.value = blank
+          ? '空白預熱已失效或被回收；開啟文件時會重新分配會話。'
+          : '會話已到期或來源不可用，請重新開啟文件。'
+        emit('change')
       }
     }, 30000)
   } catch (cause) {
     if (!disposed && sequence === request) {
+      desired = ''
       progress.value = ''
       error.value = cause instanceof Error ? cause.message : '無法開啟'
     }
   } finally {
     if (sequence === request) opening = false
+    emit('change')
   }
 }
 onUnmounted(() => {

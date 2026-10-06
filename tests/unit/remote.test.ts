@@ -18,6 +18,8 @@ const limits = {
   appPort: 8085 as const,
   streamPort: 8086 as const,
   maxSessions: 4,
+  maxSessionsPerAccount: 4,
+  blankPrewarmIdleMs: 60000,
   disconnectGraceMs: 3000,
   maxWidth: 1920,
   maxHeight: 1080,
@@ -452,18 +454,32 @@ test('Concurrent leases isolate workers, tickets, sockets and cleanup; capacity 
   }
 })
 
-test('Remote capacity defaults to four and rejects invalid limits or overlapping public ports', () => {
+test('Remote capacity defaults to 32 and rejects invalid limits or overlapping public ports', () => {
   const raw = JSON.parse(
     readFileSync('deploy/selkies/config.example.json', 'utf8')
   )
   raw.googleClientId = raw.googleClientSecret = 'synthetic'
   delete raw.remote.maxSessions
-  assert.equal(parseConfig(raw).remote?.maxSessions, 4)
-  for (const maxSessions of [0, 9, 2.5])
+  assert.equal(parseConfig(raw).remote?.maxSessions, 32)
+  delete raw.remote.maxSessionsPerAccount
+  delete raw.remote.blankPrewarmIdleMs
+  assert.equal(parseConfig(raw).remote?.maxSessionsPerAccount, 4)
+  assert.equal(parseConfig(raw).remote?.blankPrewarmIdleMs, 60000)
+  for (const maxSessionsPerAccount of [0, 33, 2.5])
+    assert.throws(() =>
+      parseConfig({ ...raw, remote: { ...raw.remote, maxSessionsPerAccount } })
+    )
+  for (const blankPrewarmIdleMs of [0, 999, 3600001, 2000.5])
+    assert.throws(() =>
+      parseConfig({ ...raw, remote: { ...raw.remote, blankPrewarmIdleMs } })
+    )
+  for (const maxSessions of [0, 33, 2.5])
     assert.throws(() =>
       parseConfig({ ...raw, remote: { ...raw.remote, maxSessions } })
     )
   assert.throws(() => parseConfig({ ...raw, port: 8087 }), /isolated/)
+  assert.throws(() => parseConfig({ ...raw, port: 8117 }), /isolated/)
+  assert.equal(parseConfig({ ...raw, port: 8118 }).remote?.maxSessions, 32)
 })
 
 test('Client editor requires an explicit opt-in on the accepted session-edit profile; disconnect grace is bounded', () => {

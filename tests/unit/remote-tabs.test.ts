@@ -63,7 +63,7 @@ test('A tab switches documents at full capacity without restarting its worker; s
       2
     )
     assert.equal(a, b)
-    assert.equal(b.file.id, 'B')
+    assert.equal(b.file?.id, 'B')
     assert.equal(b.generation, 2)
     assert.deepEqual([starts, reloads, stops], [1, 1, 0])
     assert.equal(manager.leases.length, 1)
@@ -309,7 +309,7 @@ test('Document switching keeps stream authorization valid while awaiting the new
     )
     assert.equal(manager.leases.length, 1)
     release()
-    assert.equal((await switching).file.id, 'B')
+    assert.equal((await switching).file?.id, 'B')
   } finally {
     await manager.close()
   }

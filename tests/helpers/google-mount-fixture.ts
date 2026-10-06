@@ -36,6 +36,8 @@ export async function createGoogleFixture(
     remoteWorker?: (slot: number) => RemoteWorker
     withThumbnail?: boolean
     maxSessions?: number
+    maxSessionsPerAccount?: number
+    blankPrewarmIdleMs?: number
     allowClientEditor?: boolean
   } = {}
 ) {
@@ -69,6 +71,8 @@ export async function createGoogleFixture(
             appPort: 8085,
             streamPort: 8086,
             maxSessions: options.maxSessions ?? 4,
+            maxSessionsPerAccount: options.maxSessionsPerAccount,
+            blankPrewarmIdleMs: options.blankPrewarmIdleMs,
             maxWidth: 1920,
             maxHeight: 1080,
             maxPixels: 2073600,

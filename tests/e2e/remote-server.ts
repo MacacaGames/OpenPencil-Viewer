@@ -12,7 +12,10 @@ import {
 } from '../helpers/google-mount-fixture.ts'
 import { attachRemoteStream } from '../../apps/api/remote-stream.ts'
 import type { RemoteLease } from '../../apps/api/remote-sessions.ts'
-const base = resolve('.work/remote-e2e')
+const port = Number(process.env.PORTAL_TEST_REMOTE_PORT ?? 3215)
+const base = resolve(
+  port === 3215 ? '.work/remote-e2e' : `.work/remote-e2e-${port}`
+)
 rmSync(base, { recursive: true, force: true })
 mkdirSync(base, { recursive: true })
 const corePath = resolve(base, 'synthetic-core.js')
@@ -40,10 +43,13 @@ await once(upstream, 'listening')
 const address = upstream.address()
 if (!address || typeof address === 'string') throw new Error('test socket')
 let pauseStartup = false
+let starts = 0,
+  reloads = 0
 const worker = {
   corePath,
   streamUrl: `http://127.0.0.1:${address.port}`,
   start: async (lease: RemoteLease) => {
+    starts++
     mkdirSync(base + '/remote/' + lease.id, { recursive: true })
     if (pauseStartup)
       await new Promise<void>((_resolve, reject) => {
@@ -54,13 +60,18 @@ const worker = {
         )
       })
   },
+  reload: async () => {
+    reloads++
+  },
   stop: async (id: string) => {
     console.log('synthetic worker stopped', id)
   }
 }
-const fixture = await createGoogleFixture(base, 3215, {
+const fixture = await createGoogleFixture(base, port, {
   viewerMode: 'selkies',
-  maxSessions: 2,
+  maxSessions: port === 3216 ? 4 : 2,
+  maxSessionsPerAccount: port === 3216 ? 2 : 4,
+  blankPrewarmIdleMs: port === 3216 ? 1000 : 60000,
   allowClientEditor: true,
   remoteWorker: () => worker
 })
@@ -84,12 +95,19 @@ app.get('/__fixture/lease', (c) =>
 )
 app.get('/__fixture/status', (c) =>
   c.json({
+    starts,
+    reloads,
     leases: fixture.portal.remote?.leases.map((lease) => ({
       id: lease.id,
       tab: lease.tab,
-      file: lease.file.name,
+      file: lease.file?.name,
+      parked: lease.parked,
       generation: lease.generation,
-      ready: lease.ready
+      ready: lease.ready,
+      blankIdleMs:
+        lease.blankIdleSince === undefined
+          ? undefined
+          : Date.now() - lease.blankIdleSince
     }))
   })
 )
@@ -97,17 +115,20 @@ app.route('/', fixture.portal.app)
 const server = serve({
   fetch: app.fetch,
   hostname: '127.0.0.1',
-  port: 3215
+  port
 }) as Server
 attachRemoteStream(server, fixture.portal, fixture.config)
-const internal = serve({
-  fetch: fixture.portal.internalApp.fetch,
-  hostname: '127.0.0.1',
-  port: 8085
-})
+const internal =
+  port === 3215
+    ? serve({
+        fetch: fixture.portal.internalApp.fetch,
+        hostname: '127.0.0.1',
+        port: 8085
+      })
+    : undefined
 for (const signal of ['SIGINT', 'SIGTERM'])
   process.on(signal, () => {
-    internal.close()
+    internal?.close()
     server.close()
     upstream.close()
     fixture.close()

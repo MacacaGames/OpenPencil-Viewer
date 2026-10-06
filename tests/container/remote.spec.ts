@@ -90,6 +90,22 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
   const before = await (
     await page.request.get(origin + '/__fixture/status')
   ).json()
+  await expect
+    .poll(
+      async () =>
+        (await (await page.request.get(origin + '/__fixture/status')).json())
+          .ready,
+      { timeout: 150000 }
+    )
+    .toBe(true)
+  const blank = (
+    await (await page.request.get(origin + '/__fixture/status')).json()
+  ).leases[0]
+  expect(blank.parked).toBe(true)
+  expect(blank.file).toBeUndefined()
+  await expect(page.getByTestId('server-session-usage')).toHaveText(
+    'Server 會話 1/2'
+  )
   const start = Date.now()
   await page.getByRole('button', { name: /^A.fig/ }).dblclick()
   const frame = page.frameLocator('iframe[title="OpenPencil 遠端畫面"]')
@@ -160,6 +176,7 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
   const firstLease = (
     await (await page.request.get(origin + '/__fixture/status')).json()
   ).lease
+  expect(firstLease).toBe(blank.id)
   expect(rendered.width).toBeGreaterThan(64)
   expect(rendered.width).toBeGreaterThan(1440)
   expect(rendered.width).toBeLessThanOrEqual(1920)
@@ -344,6 +361,9 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
       await page.request.get(origin + '/__fixture/status')
     ).json()
     expect(both.leases).toHaveLength(2)
+    await expect(page.getByTestId('server-session-usage')).toHaveText(
+      'Server 會話 2/2'
+    )
     const secondLease = both.leases.find(
       (lease: { id: string }) => lease.id !== firstLease
     ).id
@@ -381,17 +401,30 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
           (lease: { id: string }) => lease.id === firstLease
         )
       })
-      .toMatchObject({ file: 'B.fig', generation: 2 })
+      .toMatchObject({ file: 'B.fig', generation: blank.generation + 2 })
     await expect.poll(() => nativeZoom(firstLease)).toBeGreaterThan(0)
     const switchFrames = await video.evaluate(
       (v) => (v as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames
     )
+    // A static reconnect can stop producing delta frames. Verify an actual input-driven update.
+    const switchZoom = (await nativeZoom(firstLease))!
+    const switchBox = (await video.boundingBox())!
+    await page.mouse.move(
+      switchBox.x + switchBox.width / 2,
+      switchBox.y + switchBox.height / 2
+    )
+    await page.keyboard.down('Control')
+    await page.mouse.wheel(0, -120)
+    await page.keyboard.up('Control')
+    await expect.poll(() => nativeZoom(firstLease)).toBeGreaterThan(switchZoom)
     await expect
-      .poll(() =>
-        video.evaluate(
-          (v) =>
-            (v as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames
-        )
+      .poll(
+        () =>
+          video.evaluate(
+            (v) =>
+              (v as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames
+          ),
+        { timeout: 15000 }
       )
       .toBeGreaterThan(switchFrames)
     const reused = await (
@@ -400,6 +433,52 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
     expect(reused.profiles.sort()).toEqual([firstLease, secondLease].sort())
     console.log(
       'PASS: same tab switches FIG at capacity and retains Chromium/profile/stream'
+    )
+    const modeBefore = reused.leases.find(
+      (lease: { id: string }) => lease.id === firstLease
+    )
+    await page
+      .getByRole('combobox', { name: '開啟方式' })
+      .selectOption('client')
+    await expect(page.getByTestId('client-edit-notice')).toBeVisible({
+      timeout: 60000
+    })
+    await expect(page.locator('iframe')).toHaveCount(0)
+    await expect
+      .poll(
+        async () =>
+          (
+            await (await page.request.get(origin + '/__fixture/status')).json()
+          ).leases.find((lease: { id: string }) => lease.id === firstLease)
+            ?.parked
+      )
+      .toBe(true)
+    const modeZoom = await nativeZoom(firstLease)
+    const modeResume = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        /\/api\/files\/[^/]+\/remote$/.test(new URL(response.url()).pathname)
+    )
+    await page
+      .getByRole('combobox', { name: '開啟方式' })
+      .selectOption('server')
+    expect((await (await modeResume).json()).id).toBe(firstLease)
+    await expect(video).toBeVisible({ timeout: 30000 })
+    await expect
+      .poll(() =>
+        video.evaluate(
+          (v) =>
+            (v as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames
+        )
+      )
+      .toBeGreaterThan(0)
+    const modeAfter = (
+      await (await page.request.get(origin + '/__fixture/status')).json()
+    ).leases.find((lease: { id: string }) => lease.id === firstLease)
+    expect(modeAfter.generation).toBe(modeBefore.generation)
+    expect(modeAfter.zoom).toBe(modeZoom)
+    console.log(
+      'PASS: client/server mode switch retains native worker, graph generation and zoom at capacity'
     )
     // A closes without logout; B must keep its independent native session alive.
     await page.close()

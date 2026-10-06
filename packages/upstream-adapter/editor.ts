@@ -5,7 +5,24 @@ import {
 import type { EditorStore } from '@/app/editor/session'
 import { applyImportedDocument } from '@/app/document/io/imported-document'
 import { lockGraph } from './readonly'
-import type { SceneGraph } from '@open-pencil/scene-graph'
+import { SceneGraph } from '@open-pencil/scene-graph'
+/** Prepare the native renderer without requesting or parsing a source document. */
+export async function loadEmpty(
+  editor: EditorStore,
+  signal: AbortSignal,
+  progress: (phase: string) => void
+) {
+  const graph = new SceneGraph()
+  return presentGraph(
+    editor,
+    graph,
+    '空白會話',
+    AbortSignal.any([signal, AbortSignal.timeout(60000)]),
+    progress,
+    undefined,
+    false
+  )
+}
 export async function loadScene(
   editor: EditorStore,
   bytes: ArrayBuffer,

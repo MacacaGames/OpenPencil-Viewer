@@ -2,6 +2,7 @@ import { defineConfig } from '@playwright/test'
 export default defineConfig({
   testDir: '.',
   testMatch: 'remote.spec.ts',
+  outputDir: '../../.work/selkies-browser-results',
   workers: 1,
   timeout: 180000,
   use: {

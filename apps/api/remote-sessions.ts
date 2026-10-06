@@ -15,10 +15,13 @@ export interface RemoteLease {
   credential: string
   ticket: string
   owner: string
+  account: string
   cookie: string
-  file: FileRecord
+  file?: FileRecord
   expires: number
   ready: boolean
+  parked?: boolean
+  awaitingConnection?: boolean
   loading?: boolean
   abort: AbortController
   disconnectedAt: number
@@ -26,6 +29,7 @@ export interface RemoteLease {
   tab?: string
   request?: number
   generation: number
+  blankIdleSince?: number
   encoderMode?: string
   display?: RemoteDisplay
 }
@@ -49,6 +53,7 @@ export type RemoteStopReason =
   | 'forced-vaapi-unverified'
   | 'forced-vaapi-fallback'
   | 'tab-closed'
+  | 'blank-prewarm-reclaimed'
 
 /** Log internal error codes only; exception messages may contain credentials/paths. */
 export function remoteErrorCode(error: unknown, fallback: string) {
@@ -69,6 +74,7 @@ export class RemoteSessions {
     }
   >()
   private closed = false
+  private admission: Promise<void> = Promise.resolve()
   private tabs = new Map<
     string,
     {
@@ -84,11 +90,21 @@ export class RemoteSessions {
     private createWorker: (slot: number) => RemoteWorker,
     private validate: (lease: RemoteLease) => Promise<void>,
     private now = Date.now,
-    private maxSessions = 4,
-    private disconnectGraceMs = 3000
+    private maxSessions = 32,
+    private disconnectGraceMs = 3000,
+    private policy = { maxSessionsPerAccount: 4, blankPrewarmIdleMs: 60000 }
   ) {
-    if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > 8)
+    if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > 32)
       throw new Error('invalid remote capacity')
+    if (
+      !Number.isInteger(policy.maxSessionsPerAccount) ||
+      policy.maxSessionsPerAccount < 1 ||
+      policy.maxSessionsPerAccount > 32 ||
+      !Number.isInteger(policy.blankPrewarmIdleMs) ||
+      policy.blankPrewarmIdleMs < 1000 ||
+      policy.blankPrewarmIdleMs > 3600000
+    )
+      throw new Error('invalid remote allocation policy')
     this.timer = setInterval(
       () =>
         void this.check().catch(() =>
@@ -101,48 +117,95 @@ export class RemoteSessions {
   async create(
     owner: string,
     cookie: string,
-    file: FileRecord,
+    file: FileRecord | undefined,
     display?: RemoteDisplay,
     tab?: string,
-    request?: number
+    request?: number,
+    account = owner
   ) {
-    const reserved = [...this.entries.values()]
-    if (
-      this.closed ||
-      reserved.length >= this.maxSessions ||
-      reserved.some(({ lease }) => lease.owner === owner && lease.tab === tab)
-    )
-      throw new AppError('remote-busy', 429)
-    const slot = Array.from(
-      { length: this.maxSessions },
-      (_, index) => index
-    ).find((index) => !reserved.some(({ lease }) => lease.slot === index))!
-    const worker = this.createWorker(slot)
     const startedAt = this.now()
-    const lease: RemoteLease = {
-      id: token(),
-      slot,
-      credential: token(),
-      ticket: token(),
-      owner,
-      cookie,
-      file,
-      expires: this.now() + 180000,
-      ready: false,
-      abort: new AbortController(),
-      disconnectedAt: 0,
-      display,
-      tab,
-      request,
-      generation: 1
-    }
-    this.entries.set(lease.id, { lease, worker, connections: new Set() }) // Reserve before awaiting startup.
+    const reserving = this.admission.then(async () => {
+      const current = () => {
+        if (this.closed) throw new AppError('remote-busy', 429)
+        if (tab !== undefined && request !== undefined) {
+          const state = this.tabState(owner, tab)
+          if (request < state.latest || request <= state.closed)
+            throw new AppError('remote-superseded', 409)
+        }
+      }
+      current()
+      // Reclaim only an idle blank canvas, and only from the limiting account
+      // when its quota is full. Reservation/cleanup must finish before reuse.
+      const accountFull = () =>
+        this.accountUsage(account) >= this.policy.maxSessionsPerAccount
+      if (accountFull() || this.entries.size >= this.maxSessions) {
+        const candidate = [...this.entries.values()]
+          .filter(
+            ({ lease, closing, connections }) =>
+              !closing &&
+              !lease.abort.signal.aborted &&
+              lease.ready &&
+              !lease.loading &&
+              !lease.file &&
+              lease.parked &&
+              connections.size === 0 &&
+              lease.blankIdleSince !== undefined &&
+              this.now() - lease.blankIdleSince >=
+                this.policy.blankPrewarmIdleMs &&
+              (!accountFull() || lease.account === account)
+          )
+          .sort((a, b) => a.lease.blankIdleSince! - b.lease.blankIdleSince!)[0]
+        if (candidate)
+          await this.stop(candidate.lease.id, 'blank-prewarm-reclaimed')
+      }
+      current()
+      if (accountFull()) throw new AppError('remote-account-limit', 429)
+      const reserved = [...this.entries.values()]
+      if (
+        reserved.length >= this.maxSessions ||
+        reserved.some(({ lease }) => lease.owner === owner && lease.tab === tab)
+      )
+        throw new AppError('remote-busy', 429)
+      const slot = Array.from(
+        { length: this.maxSessions },
+        (_, index) => index
+      ).find((index) => !reserved.some(({ lease }) => lease.slot === index))!
+      const worker = this.createWorker(slot)
+      const lease: RemoteLease = {
+        id: token(),
+        slot,
+        credential: token(),
+        ticket: token(),
+        owner,
+        account,
+        cookie,
+        file,
+        expires: this.now() + 180000,
+        ready: false,
+        parked: !file,
+        awaitingConnection: true,
+        abort: new AbortController(),
+        disconnectedAt: 0,
+        display,
+        tab,
+        request,
+        generation: 1
+      }
+      this.entries.set(lease.id, { lease, worker, connections: new Set() })
+      return { lease, worker }
+    })
+    this.admission = reserving.then(
+      () => undefined,
+      () => undefined
+    )
+    const { lease, worker } = await reserving
     try {
       await this.validate(lease)
       await worker.start(lease)
       await this.validate(lease)
       if (!this.has(lease)) throw new AppError('remote-expired', 401)
       lease.ready = true
+      if (!lease.file) lease.blankIdleSince = this.now()
       lease.expires = this.now() + 90000
       lease.disconnectedAt = this.now()
       console.log(
@@ -191,7 +254,46 @@ export class RemoteSessions {
     file: FileRecord,
     display: RemoteDisplay,
     tab: string,
-    request: number
+    request: number,
+    account = owner
+  ) {
+    return this.openTabDocument(
+      owner,
+      cookie,
+      file,
+      display,
+      tab,
+      request,
+      account
+    )
+  }
+  /** Warm/park the tab's existing worker, or prepare a blank native canvas. */
+  warmTab(
+    owner: string,
+    cookie: string,
+    display: RemoteDisplay,
+    tab: string,
+    request: number,
+    account = owner
+  ) {
+    return this.openTabDocument(
+      owner,
+      cookie,
+      undefined,
+      display,
+      tab,
+      request,
+      account
+    )
+  }
+  private openTabDocument(
+    owner: string,
+    cookie: string,
+    file: FileRecord | undefined,
+    display: RemoteDisplay,
+    tab: string,
+    request: number,
+    account: string
   ) {
     const state = this.tabState(owner, tab)
     if (request <= state.latest || request <= state.closed)
@@ -217,11 +319,31 @@ export class RemoteSessions {
       }
       if (request < state.latest || request <= state.closed || this.closed)
         throw new AppError('remote-superseded', 409)
-      if (!entry) return this.create(owner, cookie, file, display, tab, request)
+      if (!entry)
+        return this.create(owner, cookie, file, display, tab, request, account)
       const { lease, worker } = entry
+      if (lease.account !== account) throw new AppError('remote-expired', 401)
+      if (!lease.file) lease.blankIdleSince = this.now()
       lease.request = request
-      lease.file = file
       lease.display = display
+      // Mode changes preserve the native graph; only a different source needs a reload.
+      const changed =
+        file &&
+        (file.id !== lease.file?.id || file.revision !== lease.file?.revision)
+      if (!changed) {
+        await this.validate(lease)
+        if (!this.has(lease) || request <= state.closed)
+          throw new AppError('remote-superseded', 409)
+        lease.parked = !file
+        lease.awaitingConnection = !!file
+        lease.expires = this.now() + 90000
+        if (file && !entry.connections.size) lease.disconnectedAt = this.now()
+        if (!file) for (const close of [...entry.connections]) close()
+        return lease
+      }
+      lease.file = file
+      lease.parked = false
+      lease.awaitingConnection = true
       lease.generation++
       // The stream stays usable while the existing Chromium changes documents.
       lease.loading = true
@@ -284,7 +406,7 @@ export class RemoteSessions {
       lease.owner !== owner ||
       !secretEqual(credential, lease.credential) ||
       lease.expires <= this.now() ||
-      (ready && !lease.ready)
+      (ready && (!lease.ready || lease.parked))
     )
       throw new AppError('remote-expired', 401)
     await this.validate(lease)
@@ -329,6 +451,7 @@ export class RemoteSessions {
     if (this.has(lease)) {
       lease.disconnectedAt = 0
       lease.connectedOnce = true
+      lease.awaitingConnection = false
     }
   }
   disconnected(lease: RemoteLease) {
@@ -398,9 +521,12 @@ export class RemoteSessions {
       if (
         lease.ready &&
         !lease.loading &&
+        !lease.parked &&
         lease.disconnectedAt &&
         this.now() - lease.disconnectedAt >
-          (lease.connectedOnce ? this.disconnectGraceMs : 15000)
+          (lease.connectedOnce && !lease.awaitingConnection
+            ? this.disconnectGraceMs
+            : 15000)
       ) {
         reason = 'stream-disconnected'
         throw new Error(reason)
@@ -414,5 +540,23 @@ export class RemoteSessions {
     this.closed = true
     clearInterval(this.timer)
     return this.stop(undefined, 'shutdown')
+  }
+  /** Include starting/retiring slots: none is available until cleanup finishes. */
+  get capacity() {
+    return { used: this.entries.size, limit: this.maxSessions }
+  }
+  private accountUsage(account: string) {
+    return [...this.entries.values()].filter(
+      ({ lease }) => lease.account === account
+    ).length
+  }
+  capacityFor(account: string) {
+    return {
+      ...this.capacity,
+      account: {
+        used: this.accountUsage(account),
+        limit: Math.min(this.maxSessions, this.policy.maxSessionsPerAccount)
+      }
+    }
   }
 }

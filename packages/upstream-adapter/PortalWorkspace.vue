@@ -19,6 +19,8 @@ import EditorKeyboard from '../../portal/upstream-adapter/EditorKeyboard'
 import { browserTab } from '../../portal/upstream-adapter/browser-tab'
 import FilePreview from '../../portal/upstream-adapter/FilePreview.vue'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
+import AppDialog from '@/components/ui/dialog/AppDialog.vue'
+import AppButton from '@/components/ui/button/AppButton.vue'
 import type { FileRecord } from '../../portal/contracts/index'
 import type { ViewerManifest } from '../../portal/contracts/viewer'
 const manifest = ref<ViewerManifest | null>(null)
@@ -30,8 +32,21 @@ const editable = ref(false)
 const allowClientEditor = ref(false),
   rendering = ref<'server' | 'client'>('server'),
   remoteDeployment = ref(false),
-  remoteStarted = ref(false),
   selectedDocument = ref<FileRecord | null>(null)
+const remoteUsage = ref<{
+    used: number
+    limit: number
+    account: { used: number; limit: number }
+  } | null>(null),
+  remoteLimit = ref(32),
+  accountLimit = ref(4),
+  remoteRetry = ref(0),
+  capacityBlocked = ref(false),
+  fallbackPrompt = ref(false),
+  capacityReason = ref<'server' | 'account'>('server'),
+  warmReleased = ref(false)
+let usageTimer: ReturnType<typeof setInterval> | undefined,
+  checkingUsage = false
 const tab = browserTab(),
   router = useRouter(),
   route = useRoute()
@@ -78,6 +93,7 @@ function dispose() {
   disposed = true
   abort.abort()
   documentAbort?.abort()
+  clearInterval(usageTimer)
   manifest.value = null
   editor.dispose()
 }
@@ -110,6 +126,17 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   })
   if (!result.ok) throw new RequestError(result.status)
   return result.json() as Promise<T>
+}
+async function refreshRemoteUsage() {
+  if (!me.value || !remoteDeployment.value || checkingUsage || disposed) return
+  checkingUsage = true
+  try {
+    remoteUsage.value = await api('/api/remote/status')
+  } catch {
+    remoteUsage.value = null
+  } finally {
+    checkingUsage = false
+  }
 }
 async function browse(cursor = '0', append = false) {
   error.value = ''
@@ -201,15 +228,52 @@ function returnToList(event: MouseEvent) {
   }
 }
 function chooseRendering() {
+  warmReleased.value = false
+  capacityBlocked.value = false
+  fallbackPrompt.value = false
   try {
     sessionStorage.setItem('portal.rendering', rendering.value)
   } catch {}
   remote.value = remoteDeployment.value && rendering.value === 'server'
   if (viewing.value) void loadLocation()
 }
+function remoteBusy(id: string, reason: 'server' | 'account') {
+  if (!remote.value || disposed) return
+  // Navigation can precede metadata delivery; ignore refusal for the prior route.
+  if (id) {
+    if (
+      !viewing.value ||
+      documentId.value !== id ||
+      new URLSearchParams(location.search).get('id') !== id
+    )
+      return
+  } else if (viewing.value || location.pathname === '/editor') return
+  capacityBlocked.value = true
+  capacityReason.value = reason
+  if (id && allowClientEditor.value) fallbackPrompt.value = true
+  void refreshRemoteUsage()
+}
+function useClientRendering() {
+  if (!allowClientEditor.value) return
+  rendering.value = 'client'
+  chooseRendering()
+}
+function retryRemote() {
+  warmReleased.value = false
+  capacityBlocked.value = false
+  fallbackPrompt.value = false
+  remoteRetry.value++
+}
+function remoteWarmReleased() {
+  warmReleased.value = true
+  void refreshRemoteUsage()
+}
 watch(
   () => route.fullPath,
   () => {
+    warmReleased.value = false
+    capacityBlocked.value = false
+    fallbackPrompt.value = false
     if (me.value && remoteDeployment.value) void loadLocation()
   }
 )
@@ -223,12 +287,16 @@ onMounted(async () => {
       viewer: string
       mode: string
       allowClientEditor: boolean
+      maxSessions: number
+      maxSessionsPerAccount: number
     }>('/auth/mode')
     provider.value = mode.provider
     authorization.value = mode.authorization
     native.value = mode.viewer === 'native'
     remoteDeployment.value = mode.viewer === 'selkies'
     allowClientEditor.value = mode.allowClientEditor
+    remoteLimit.value = mode.maxSessions ?? 32
+    accountLimit.value = mode.maxSessionsPerAccount ?? 4
     try {
       if (
         allowClientEditor.value &&
@@ -239,6 +307,10 @@ onMounted(async () => {
     remote.value = remoteDeployment.value && rendering.value === 'server'
     editable.value = remoteDeployment.value && mode.mode === 'session-edit'
     await refresh()
+    if (remoteDeployment.value) {
+      void refreshRemoteUsage()
+      usageTimer = setInterval(() => void refreshRemoteUsage(), 2000)
+    }
     await loadLocation()
   } catch (err) {
     if (abort.signal.aborted) return
@@ -265,6 +337,7 @@ async function loadLocation() {
         roots.value = (await api<{ items: FileRecord[] }>('/api/roots')).items
       if (!parent.value) parent.value = roots.value[0]?.id ?? ''
       await browse()
+      if (request === loadRequest) ready.value = true
       return
     }
     const id = new URLSearchParams(location.search).get('id')
@@ -314,7 +387,6 @@ async function loadLocation() {
       )
     }
     ready.value = true
-    if (remote.value) remoteStarted.value = true
     progress.value = ''
   } catch (err) {
     if (
@@ -378,6 +450,24 @@ onUnmounted(() => {
           <option value="client">瀏覽器編輯器</option>
         </select>
       </label>
+      <span
+        v-if="me && remoteDeployment"
+        data-test-id="server-session-usage"
+        class="text-sm text-muted"
+        title="全伺服器已佔用／上限，包含預熱與保留中的會話"
+        >Server 會話 {{ remoteUsage?.used ?? '—' }}/{{
+          remoteUsage?.limit ?? remoteLimit
+        }}</span
+      >
+      <span
+        v-if="me && remoteDeployment"
+        data-test-id="account-session-usage"
+        class="text-sm text-muted"
+        title="此 Google 帳號跨裝置與登入的已佔用／上限"
+        >我的會話 {{ remoteUsage?.account?.used ?? '—' }}/{{
+          remoteUsage?.account?.limit ?? accountLimit
+        }}</span
+      >
       <button
         v-if="viewing && remoteDeployment"
         class="rounded border border-border px-3 py-1"
@@ -394,6 +484,42 @@ onUnmounted(() => {
         登出
       </button>
     </header>
+    <AppAlert
+      v-if="me && remote && capacityBlocked && !fallbackPrompt"
+      heading="未取得伺服器會話"
+      class="m-4 shrink-0"
+      data-test-id="remote-capacity-notice"
+    >
+      <template #default>
+        {{
+          capacityReason === 'account'
+            ? '此帳號的伺服器會話已達上限（包含其他裝置與分頁）'
+            : '伺服器會話已達上限'
+        }}。可以稍後重試{{ allowClientEditor ? '，或改用瀏覽器編輯器' : '' }}。
+        <span v-if="allowClientEditor"
+          >瀏覽器編輯器會下載完整 .fig 到此裝置。</span
+        >
+      </template>
+      <template #actions>
+        <AppButton variant="outline" color="neutral" @click="retryRemote"
+          >重試伺服器</AppButton
+        >
+        <AppButton
+          v-if="allowClientEditor"
+          color="primary"
+          variant="solid"
+          @click="viewing ? (fallbackPrompt = true) : useClientRendering()"
+          >改用瀏覽器編輯器</AppButton
+        >
+      </template>
+    </AppAlert>
+    <AppAlert
+      v-if="me && remote && !viewing && warmReleased && !capacityBlocked"
+      heading="空白預熱已釋放"
+      description="空白預熱已失效或被回收。選擇文件時會重新分配；文件列表仍可瀏覽。"
+      class="m-4 shrink-0"
+      data-test-id="remote-prewarm-released"
+    />
     <div v-if="!me" class="mx-auto my-16 flex max-w-lg flex-col gap-5 px-8">
       <h1 class="text-xl font-semibold">登入設計文件入口</h1>
       <p v-if="authorization === 'google-mount'">
@@ -587,13 +713,63 @@ onUnmounted(() => {
       </template>
     </template>
     <RemoteViewer
-      v-if="remote && remoteStarted && documentId && me"
-      v-show="viewing"
+      v-if="remoteDeployment && me"
+      v-show="remote && viewing"
       :editable="editable"
       :document-id="documentId"
+      :revision="revision"
+      :retry="remoteRetry"
+      :active="
+        remote && viewing && !!documentId && documentId === route.query.id
+      "
+      :prewarm="remote && !viewing && ready"
       :csrf="me.csrf"
       :tab="tab"
+      @change="refreshRemoteUsage"
+      @busy="remoteBusy"
+      @warm-released="remoteWarmReleased"
     />
+    <AppDialog
+      v-model:open="fallbackPrompt"
+      :heading="
+        capacityReason === 'account' ? '此帳號的會話已達上限' : '伺服器會話已滿'
+      "
+      description="可改用瀏覽器編輯器，或稍後重試伺服器。"
+      close-label="取消切換"
+      data-test-id="client-fallback-prompt"
+      size="sm"
+    >
+      <p class="text-sm">
+        要改用瀏覽器編輯器開啟「{{ selectedDocument?.name }}」嗎？
+      </p>
+      <p class="mt-3 text-sm text-muted">
+        完整 .fig
+        將下載到此裝置，由瀏覽器載入；較大文件可能需要更多記憶體。修改不儲存，也不會自動與伺服器畫布同步。
+      </p>
+      <p class="mt-3 text-xs text-muted">
+        Server 會話 {{ remoteUsage?.used ?? '—' }}/{{
+          remoteUsage?.limit ?? remoteLimit
+        }}
+        · 我的會話 {{ remoteUsage?.account?.used ?? '—' }}/{{
+          remoteUsage?.account?.limit ?? accountLimit
+        }}
+        · 選擇會保留在目前分頁
+      </p>
+      <template #footer>
+        <AppButton
+          variant="ghost"
+          color="neutral"
+          @click="fallbackPrompt = false"
+          >取消</AppButton
+        >
+        <AppButton variant="outline" color="neutral" @click="retryRemote"
+          >重試伺服器</AppButton
+        >
+        <AppButton color="primary" variant="solid" @click="useClientRendering"
+          >改用瀏覽器編輯器</AppButton
+        >
+      </template>
+    </AppDialog>
     <AppAlert
       v-if="error"
       :description="error"

@@ -42,21 +42,21 @@ Dockerfile 使用 LSIO 映像作為元件來源，覆寫 entrypoint，以 `10001
 
 ## 資料與連線邊界
 
-多人模式依容量建立X11 `:1`–`:8` 與loopback串流8086–8093，private app共用loopback8085。第一次開檔的解析依序執行，同一revision可共用有上限的唯讀scene cache。此模式提供各自操作文件，沒有共同編輯或原檔儲存。提高容量前，依實際文件大小量測記憶體、CPU／encoder、`shm_size`與`pids_limit`；預設4是併發限制，四人使用大檔的Unraid／GPU效能仍需現場驗證。
+多人模式依容量建立X11 `:1`–`:32` 與loopback串流8086–8117，private app共用loopback8085。第一次開檔的解析依序執行，同一revision可共用有上限的唯讀scene cache。此模式提供各自操作文件，沒有共同編輯或原檔儲存。提高容量前，依實際文件大小量測記憶體、CPU／encoder、`shm_size`與`pids_limit`；預設32是名額上限，32個原生 worker 的Unraid／GPU效能與記憶體容量仍需現場驗證。
 
-游標在遠端畫布上時，Ctrl＋滾輪或macOS Command＋滾輪可縮放，觸控板的Ctrl-wheel事件也會補送修飾鍵至原生畫布。一般滾輪與平移仍由Selkies處理。操作員更新一般CI映像並重建容器後即生效；舊config可省略`maxSessions`，使用預設4。
+游標在遠端畫布上時，Ctrl＋滾輪或macOS Command＋滾輪可縮放，觸控板的Ctrl-wheel事件也會補送修飾鍵至原生畫布。一般滾輪與平移仍由Selkies處理。操作員更新一般CI映像並重建容器後即生效；舊config可省略`maxSessions`，使用預設32。
 
 ```mermaid
 flowchart LR
   B[使用者瀏覽器] -->|HTTPS：Google 登入、文件列表| P[Portal :3000]
   B -->|已驗證 WebSocket：H.264 畫面與操作| P
-  P -->|loopback :8086–8093| S[每人獨立 Selkies / X11]
+  P -->|loopback :8086–8117| S[每人獨立 Selkies / X11]
   S --> C[獨立 profile 的 Chromium]
   C -->|loopback :8085：短效內部 ticket| A[原生會話 adapter]
   A -->|受控唯讀開檔| N[指定 NAS CIFS / NFS 目錄]
 ```
 
-外部 `/scene`、`/content` 繼續回應 410。內部文件路由只存在另一個 loopback listener；公開 listener 的 `/_remote/*`、`/remote-desktop` 回應 404。內部 ticket 與活動會話、Portal session、文件 revision 綁定，讀取前後重新驗證。不能把 8085 或 8086–8093 發布到主機或代理。
+外部 `/scene`、`/content` 繼續回應 410。內部文件路由只存在另一個 loopback listener；公開 listener 的 `/_remote/*`、`/remote-desktop` 回應 404。內部 ticket 與活動會話、Portal session、文件 revision 綁定，讀取前後重新驗證。不能把 8085 或 8086–8117 發布到主機或代理。
 
 外部瀏覽器在伺服器畫面模式使用官方 Selkies core 解碼 H.264；不解析 FIG、不接收 scene、不建立 OpenPencil 文件 graph。原生 UI 在伺服器 Chromium 内運作，切頁、縮放與平移使用保留的 renderer、圖片與字體狀態。內部 scene cache 有 64MiB 上限，超過上限的文件在重新建立會話時可能重新解析；現有原生圖片 cache 上限沿用 adapter，不是整個程序或 VRAM 上限。
 
@@ -70,17 +70,52 @@ flowchart LR
   "viewerMode": "selkies",
   "allowClientEditor": true,
   "remote": {
-    "maxSessions": 4,
+    "maxSessions": 32,
+    "maxSessionsPerAccount": 4,
+    "blankPrewarmIdleMs": 60000,
     "disconnectGraceMs": 3000
   }
 }
 ```
 
-以上是需合併的欄位，不是完整 config；`remote` 原有 runtimePath／ports／解析度欄位也要保留。變更後由操作員重新啟動／重建容器；本次程式修正需使用包含它的新映像。`maxSessions` 是整個容器可同時使用的遠端分頁數，允許1–8、預設4；兩個分頁即算兩個會話，同一分頁切檔不增加會話。回到文件列表仍保留該分頁的遠端會話，讓再次開檔沿用它；關閉分頁、登出或改用瀏覽器編輯器會釋放。
+以上是需合併的欄位，不是完整 config；`remote` 原有 runtimePath／ports／解析度欄位也要保留。變更後由操作員重新啟動／重建容器；本次程式修正需使用包含它的新映像。`maxSessions` 是整個容器可同時使用的遠端分頁數，允許1–32、預設32；兩個分頁即算兩個會話，同一分頁切檔不增加會話。伺服器模式進入文件列表就預熱一個空白原生畫布，完成 renderer／字體準備，但在選檔前不匯入 FIG。已有會話則保留目前畫布；回到列表或切成瀏覽器編輯器會停串流、保留 worker/profile 與記憶體修改，再回到同一文件和 revision 不重新載入。關閉分頁、登出或租約失效會釋放；容量不足時也可回收閒置空白預熱，規則見下方。既有 config 明確指定的較小上限仍會保留，需自行改為32；省略才套用新預設。
 
 `allowClientEditor` 省略或false時只保留原有伺服器畫面。設true後，頁面「開啟方式」可選「伺服器畫面」或「瀏覽器編輯器」，選擇保留在目前分頁。此開關只接受已核准的`selkies`＋`session-edit`＋`google-mount`設定，不開啟尚未驗收的DSM權限模式。
 
-伺服器畫面只傳H.264與操作；瀏覽器編輯器會透過已登入且重新授權、revision吻合的`/client-content`取得完整FIG，由瀏覽器worker解析並保留原生OpenPencil UI，不占遠端slot。原有`/content`與公開`/scene`仍回410。這個選項明確允許完整文件內容進入用戶端；修改仍只在記憶體，不儲存草稿、不匯出、不寫回NAS，關頁或重新載入清除修改。瀏覽器模式的記憶體與解析能力由使用者設備承擔，大檔適用性需現場量測。
+伺服器畫面只傳H.264與操作；瀏覽器編輯器會透過已登入且重新授權、revision吻合的`/client-content`取得完整FIG，由瀏覽器worker解析並保留原生OpenPencil UI，解析本身不建立遠端slot；若此分頁先前已有預熱或遠端文件，其保留會話仍占一個slot。從已記住的瀏覽器模式進入列表，不建立預熱會話。原有`/content`與公開`/scene`仍回410。這個選項明確允許完整文件內容進入用戶端；修改仍只在記憶體，不儲存草稿、不匯出、不寫回NAS，關頁或重新載入清除修改。瀏覽器模式的記憶體與解析能力由使用者設備承擔，大檔適用性需現場量測。
+
+頁首「Server 會話 x/y」表示全容器目前已佔用／最大名額，每2秒更新，包含其他使用者、空白預熱、保留、啟動中與清理中的名額；清理完成才扣除。額滿時文件列表仍可瀏覽，也可使用已啟用的瀏覽器編輯器。切換模式不會同步兩份畫布的暫存編輯；server 畫布會保留，client 畫布重新開啟時仍從 FIG 載入。
+
+### 帳號、登入與分頁的分配模型
+
+每個 Google 帳號可以有多個 Portal 登入，每個登入可以有多個分頁；每個分頁最多保留一個 server 畫布。跨分頁、跨瀏覽器、跨裝置不共用可變畫布；同一分頁換檔沿用 worker，但換掉原本文件的記憶體內容。渲染方式也是分頁選擇，避免一個分頁的切換影響其他工作。
+
+| 層級 | 身份鍵／責任 |
+| --- | --- |
+| Google 使用者 | 後端驗證並正規化的 `(iss, sub)`，用於身份與跨登入／裝置的帳號配額；email 只作顯示／受控對應，不作畫布主鍵。 |
+| Portal 登入 | 綁定 cookie、CSRF、授權與撤銷；目前 lease owner 是此登入的 server-side session ID。登出／重新登入會撤銷相應舊登入。 |
+| 瀏覽器分頁 | 分頁 UUID，lease 查找用 `(Portal session ID, tab UUID)`；UUID不是授權憑證。SPA換檔保持 UUID；新開分頁重新產生。 |
+| Server lease | 隨機 ID／獨立 stream credential／ticket，持有 worker/profile、目前文件/revision/generation與期限；清理完成前仍占名額。 |
+
+Google 官方建議使用穩定 `sub`，不要用可變 email 當使用者主鍵：[OIDC reference](https://developers.google.com/identity/openid-connect/reference)。`sessionStorage` 可跨重整存續，且有 opener 的新頁可能複製其初始內容，因此不能假設讀到同一 UUID 就真的是同一分頁：[MDN sessionStorage](https://developer.mozilla.org/en-US/docs/Web/API/Window/sessionStorage)。目前新 navigation 會生成新 UUID，reload才沿用已存UUID；延遲 close 以遞增 request序號保護新操作，reload不保證保存server暫存修改。不要只用email或client自報UUID接回其他登入的畫布。
+
+### 額滿時的 client fallback
+
+- 列表空白預熱回應 `remote-busy` 時顯示非阻塞提示，可重試或選瀏覽器編輯器；不跳出開檔確認、不開始下載FIG。
+- 實際開檔收到429 `remote-busy` 或 `remote-account-limit` 才彈出額滿確認，分別標示伺服器或帳號上限，提供「改用瀏覽器編輯器」「重試伺服器」「取消」。使用者同意後才用既有授權/revision限制的client-content路徑取得完整FIG，並記住目前分頁的模式選擇。大檔的裝置記憶體需求、修改不儲存／不與server畫布同步會在確認中說明。
+- 全域x/y滿額不能單獨觸發強制切換：已有lease的分頁在32/32仍能換檔或恢復自己的畫布。以真正的server admission結果處理並發競態，不根據輪詢做前端預占或自動降級。
+- 取消不改模式、不下載FIG；可再次打開確認或稍後重試。名額釋放後重試會走server正常授權與分配流程。選client後不會因名額空出自動切回server。
+- 僅在`allowClientEditor`已核准啟用時提供fallback。登入/授權失敗、來源revision異動、NAS或renderer失敗不視為額滿，不以fallback繞過原錯誤。舊開檔/預熱請求的失敗也不能為現在的文件跳出確認。
+
+### 帳號配額與空白預熱回收
+
+`remote.maxSessionsPerAccount` 預設4、允許1–32，整個容器內同一個已驗證 Google `(iss, sub)` 的所有 Portal 登入／裝置合計使用；實際可用上限仍受全域 `maxSessions` 約束。啟動中、空白預熱、停串流保留與清理中的會話都計入，清理完成才扣除。新登入不能重置配額，email 相同不合併不同 subject。頁首另顯示「我的會話 x/y」，只回傳目前帳號的合計，不揭露其他人的身份、文件、tab 或 lease。已有會話的分頁在個人／全域滿額仍可換檔、停串流與恢復；每個登入仍只控制自己的 lease，登出不會替其他裝置登出。
+
+新會話分配遇到個人或全域滿額時，會先嘗試回收**最久未使用且從未載入文件**的空白預熱。`remote.blankPrewarmIdleMs` 預設60000（60秒），允許1000–3600000；從空白 worker 完成啟動、或該分頁明確再次請求預熱起算。續期心跳不重置閒置時間。沒有新分配需求就不因閒置直接回收；空白仍受原有租約／驗證規則限制。
+
+個人配額滿額時，只能回收該帳號自己的合格空白；個人尚有配額、只有全域滿額時，可回收任一帳號的合格空白。仍在啟動／開檔、近期使用、有串流連線或已載入文件的畫布不回收，包含回到列表、切client後保留的已編輯畫布。回收必須等程序／profile清理完成才分配新會話；清理失敗保留占用名額，避免重用尚有程序的slot。
+
+被回收的分頁在下次續期（最長約30秒）收到非阻塞的「空白預熱已釋放」提示；不自動重新搶占、不自動切client、不下載FIG。選檔時重新分配，若仍無可回收名額才使用既有確認fallback。個人滿額回429 `remote-account-limit`，全域滿額回429 `remote-busy`；確認與通知會區分原因。修改這些設定後由操作員重啟含新版程式的容器；本次未部署。
 
 ## 部署參數與手動步驟
 
@@ -103,7 +138,7 @@ docker compose --env-file .env -f compose.unraid.yml -f compose.gpu.yml config
 docker compose --env-file .env -f compose.unraid.yml -f compose.gpu.yml up -d --force-recreate
 ```
 
-Compose 使用 root filesystem readonly、cap_drop ALL、no-new-privileges、數值 non-root（Unraid 預設99:100）、私有 IPC、512MiB `/tmp`、1GiB `/dev/shm`、12GiB RAM、1024 pids。Portal／Chromium 不取得 Docker socket。需要更多大文件記憶體時由操作員按量測調整 mem_limit，不因此變更 NAS mount。
+Compose 使用 root filesystem readonly、cap_drop ALL、no-new-privileges、數值 non-root（Unraid 預設99:100）、私有 IPC、512MiB `/tmp`、1GiB `/dev/shm`、12GiB RAM、4096 pids。Portal／Chromium 不取得 Docker socket。32只是會話名額，不保證此12GiB／1GiB共享記憶體預算能承載32份大文件；需按實際文件與預熱worker成本量測。需要更多大文件記憶體時由操作員按量測調整 mem_limit，不因此變更 NAS mount。
 
 操作員也可選用 Unraid 常用的 `nobody:users` 數值身份 `99:100`：Docker CLI 將 `--user 10001:10001` 改為 `--user 99:100`，Compose 將 `user` 改為 `'99:100'`，並重建容器。此映像直接啟動 Node，沒有處理 `PUID`／`PGID` 的 root init；僅設定這兩個環境變數不會切換身份。專用本機 state 及其既有資料需屬於選定 UID，config／OAuth／NAS 來源需讓該身份可讀，DRM supplementary groups 仍須保留。`99:100` 的本機合成 SQLite 建立、`chmod 0600`、WAL 讀寫已驗證；完整 Unraid Chromium／GPU 會話仍待實機驗證。
 
@@ -273,7 +308,7 @@ Unraid手動量測每個檔案至少冷開、同會話切頁與連續縮放／�
 
 ## 會話、編輯與來源完整性驗收
 
-`remote.maxSessions` 省略時預設4，允許1–8；設為1可回復單人容量。每個瀏覽器分頁保留一個遠端會話；同一分頁從列表切換不同文件沿用同一Chromium profile、X display與encoder，切檔清除上一份文件的暫存編輯。同一登入可以開不同分頁，各分頁各算一個slot並使用獨立stream cookie；不同使用者可同時開同一份FIG，各自縮放、平移與暫存修改互不影響。stream cookie有效90秒，與Portal session及lease綁定；每30秒renew不延長Portal idle expiry。WS握手驗證Origin／雙cookie，1秒watchdog檢查session/文件/worker；正常關閉分頁用keepalive主動釋放，啟動中取消也能回收；異常WS斷線預設3秒寬限後由1秒watchdog清理（`remote.disconnectGraceMs`允許1000–15000，首次連線仍有15秒啟動寬限）。無pong的網路中斷另由WS heartbeat在約15秒內識別。登出／撤銷／到期只終止本人的stream，TERM/KILL子程序並刪除profile。關閉中的slot須等清理完成才可再次使用。
+`remote.maxSessions` 省略時預設32，允許1–32；設為1可回復單人容量。每個瀏覽器分頁保留一個遠端會話；同一分頁從列表切換不同文件沿用同一Chromium profile、X display與encoder，切檔清除上一份文件的暫存編輯。同一登入可以開不同分頁，各分頁各算一個slot並使用獨立stream cookie；不同使用者可同時開同一份FIG，各自縮放、平移與暫存修改互不影響。stream cookie有效90秒，與Portal session及lease綁定；每30秒renew不延長Portal idle expiry。WS握手驗證Origin／雙cookie，1秒watchdog檢查session/文件/worker；正常關閉分頁用keepalive主動釋放，啟動中取消也能回收；異常WS斷線預設3秒寬限後由1秒watchdog清理（`remote.disconnectGraceMs`允許1000–15000，首次／從保留狀態恢復串流仍有15秒連線寬限）。無pong的網路中斷另由WS heartbeat在約15秒內識別。預熱／保留狀態不套用WS斷線寬限，以每30秒HTTP renew維持；失去HTTP心跳後最遲在最後一次renew的90秒租約到期時回收。登入撤銷、來源驗證失敗、worker退出仍由1秒watchdog清理。登出／撤銷／到期只終止本人的stream，TERM/KILL子程序並刪除profile。關閉中的slot須等清理完成才可再次使用。
 
 Selkies proxy轉送頁面/zoom/pan操作與ACK；session-edit另允許文字、刪除、undo/redo與編輯快捷鍵，以每條WS的modifier狀態阻擋瀏覽器／桌面逃逸快捷鍵。阻擋命令、剪貼簿、檔案傳輸、音訊、webcam與二進位上傳，其他HTTP路由不代理。Chromiumpolicy停用下載／列印／檔案選擇／DevTools／外部URL／擴充套件。native adapter在read-only保留graph immutability；session-edit保留可變記憶體graph並啟用屬性面板、頁面新增／更名與原生編輯。兩種模式均禁止save/autosave/export/source binding/external document traffic，IndexedDB改成每次會話的記憶體實作，避免上游帳密store初始化錯誤與文件落盤。
 

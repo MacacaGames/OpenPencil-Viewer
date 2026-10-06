@@ -18,8 +18,16 @@ const schema = v.strictObject({
       appPort: v.literal(8085),
       streamPort: v.literal(8086),
       maxSessions: v.optional(
-        v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(8)),
+        v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(32)),
+        32
+      ),
+      maxSessionsPerAccount: v.optional(
+        v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(32)),
         4
+      ),
+      blankPrewarmIdleMs: v.optional(
+        v.pipe(v.number(), v.integer(), v.minValue(1000), v.maxValue(3600000)),
+        60000
       ),
       disconnectGraceMs: v.optional(
         v.pipe(v.number(), v.integer(), v.minValue(1000), v.maxValue(15000)),
