@@ -1,6 +1,6 @@
 # OpenPencil × Synology LAN Portal
 
-raster／一般 native viewer 是唯讀；Unraid Selkies 另支援操作員授權的會話編輯（修改不儲存）。原始 `.fig` 保留在 NAS；Google 僅做 OIDC 登入。完整原生 OpenPencil UI 位於乾淨、固定 SHA 的官方 submodule，Portal 的 patch 僅套入 `.work/editor`。
+raster／一般 native viewer 是唯讀；Unraid Selkies 另支援操作員授權的會話編輯（修改不儲存）。原始 `.fig` 保留在 NAS；Google 僅做 OIDC 登入。完整原生 OpenPencil UI 位於乾淨、固定 SHA 的 [MacacaGames fork](https://github.com/MacacaGames/open-pencil) submodule，更新來源為 `fix-image-reading-memory`。通用 bug fix 維護於 fork，必要時提交 upstream；Portal 客製化 patch 保留在本專案，僅套入 `.work/editor`。實際建置始終使用 `upstream.lock.json` 的固定 SHA。
 
 **目前可用：本機 Mock A/B → 不同列表 → 雙擊 → 原生 canvas/pages/layers/properties 唯讀檢視，以及已測 arm64／amd64 Docker 映像、HTTPS staging 與真實 Google 正常登入驗證。正式 NAS 尚不可用：dsm-strict native provider 待實作與實機 ACL 驗證，現在 fail closed。** 原檔 RO／Linux confinement／大 FIG headless 格式解析已測；三份真實 FIG 的原生瀏覽器載入已測；NAS、GPU 記憶體與視覺 fidelity 驗收仍待進行。詳見 [實作狀態](docs/IMPLEMENTATION_STATUS.md) 與 [手動部署清單](docs/OPERATOR_HANDOFF.md)。
 

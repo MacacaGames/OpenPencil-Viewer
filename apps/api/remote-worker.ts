@@ -270,15 +270,26 @@ export class LocalRemoteWorker implements RemoteWorker {
       `http://127.0.0.1:${settings.appPort}/remote-desktop?ticket=${lease.ticket}`
     ])
     // Ready is written only after native graph hydration and a presented frame.
+    await this.waitForDocument(lease)
+  }
+  reload(lease: RemoteLease) {
+    this.starting = this.waitForDocument(lease).finally(() => {
+      this.starting = undefined
+    })
+    return this.starting
+  }
+  private async waitForDocument(lease: RemoteLease) {
     for (let i = 0; i < 1400; i++) {
-      check()
+      if (lease.abort.signal.aborted) throw new AppError('remote-expired', 401)
       if (this.failure) throw new AppError('remote-process-failed', 503)
       try {
         const ready = JSON.parse(
           await readFile(this.directory + '/ready.json', 'utf8')
         )
-        if (ready.ready === true) return
-        throw new AppError('remote-document-failed', 422)
+        if (ready.generation === lease.generation) {
+          if (ready.ready === true) return
+          throw new AppError('remote-document-failed', 422)
+        }
       } catch (error) {
         if (error instanceof AppError) throw error
       }

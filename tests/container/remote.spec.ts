@@ -361,13 +361,56 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
         ctrlMetaPinchZoomVerified: true
       })
     )
-    await page.getByRole('button', { name: '登出', exact: true }).click()
-    await expect(page.locator('iframe')).toHaveCount(0)
+    // Both slots are occupied. Switching documents must reuse A's Chromium/display.
+    await page.getByRole('button', { name: '返回文件列表' }).click()
+    const switchResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        /\/api\/files\/[^/]+\/remote$/.test(new URL(response.url()).pathname)
+    )
+    await page.getByRole('button', { name: /^B.fig/ }).dblclick()
+    const switched = await switchResponse
+    expect(switched.status()).toBe(200)
+    expect((await switched.json()).id).toBe(firstLease)
+    await expect
+      .poll(async () => {
+        const status = await (
+          await page.request.get(origin + '/__fixture/status')
+        ).json()
+        return status.leases.find(
+          (lease: { id: string }) => lease.id === firstLease
+        )
+      })
+      .toMatchObject({ file: 'B.fig', generation: 2 })
+    await expect.poll(() => nativeZoom(firstLease)).toBeGreaterThan(0)
+    const switchFrames = await video.evaluate(
+      (v) => (v as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames
+    )
+    await expect
+      .poll(() =>
+        video.evaluate(
+          (v) =>
+            (v as HTMLVideoElement).getVideoPlaybackQuality().totalVideoFrames
+        )
+      )
+      .toBeGreaterThan(switchFrames)
+    const reused = await (
+      await page.request.get(origin + '/__fixture/status')
+    ).json()
+    expect(reused.profiles.sort()).toEqual([firstLease, secondLease].sort())
+    console.log(
+      'PASS: same tab switches FIG at capacity and retains Chromium/profile/stream'
+    )
+    // A closes without logout; B must keep its independent native session alive.
+    await page.close()
     await expect
       .poll(
         async () =>
-          (await (await page.request.get(origin + '/__fixture/status')).json())
-            .profiles
+          (
+            await (
+              await secondPage.request.get(origin + '/__fixture/status')
+            ).json()
+          ).profiles
       )
       .toEqual([secondLease])
     await expect(secondVideo).toBeVisible()
@@ -392,12 +435,15 @@ test('real Linux Selkies H.264, resize, logout and source integrity (synthetic o
     await expect
       .poll(
         async () =>
-          (await (await page.request.get(origin + '/__fixture/status')).json())
-            .profiles
+          (
+            await (
+              await secondPage.request.get(origin + '/__fixture/status')
+            ).json()
+          ).profiles
       )
       .toEqual([])
     const final = await (
-      await page.request.get(origin + '/__fixture/status')
+      await secondPage.request.get(origin + '/__fixture/status')
     ).json()
     expect(final.sourceHash).toBe(before.sourceHash)
     expect(final.sourceMtime).toBe(before.sourceMtime)

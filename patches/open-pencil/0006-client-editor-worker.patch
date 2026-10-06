@@ -1,0 +1,12 @@
+diff --git a/vite.config.ts b/vite.config.ts
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -27,7 +27,8 @@
+ export default defineConfig(async ({ command }) => {
+   await ensureBrandAssets(['web'])
+   return {
++    worker: { format: 'es' },
+     resolve: {
+       alias: createOpenPencilAliases(__dirname)
+     },
+     define: {

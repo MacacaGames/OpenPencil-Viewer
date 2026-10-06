@@ -4,15 +4,19 @@ import {
   onMounted,
   onUnmounted,
   nextTick,
-  defineAsyncComponent
+  defineAsyncComponent,
+  watch
 } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { createTab } from '@/app/tabs'
-import { useKeyboard } from '@/app/shell/keyboard/use'
 import { loadScene } from '../../portal/upstream-adapter/editor'
 import { readDownload } from '../../portal/transport/download'
 import { MAX_SCENE_BYTES, SCENE_TYPE } from '../../portal/transport/scene-wire'
 import RasterViewer from '../../portal/upstream-adapter/RasterViewer.vue'
 import RemoteViewer from '../../portal/upstream-adapter/RemoteViewer.vue'
+import ClientEditor from '../../portal/upstream-adapter/ClientEditor.vue'
+import EditorKeyboard from '../../portal/upstream-adapter/EditorKeyboard'
+import { browserTab } from '../../portal/upstream-adapter/browser-tab'
 import FilePreview from '../../portal/upstream-adapter/FilePreview.vue'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 import type { FileRecord } from '../../portal/contracts/index'
@@ -23,8 +27,17 @@ const revision = ref('')
 const native = ref(false)
 const remote = ref(false)
 const editable = ref(false)
+const allowClientEditor = ref(false),
+  rendering = ref<'server' | 'client'>('server'),
+  remoteDeployment = ref(false),
+  remoteStarted = ref(false),
+  selectedDocument = ref<FileRecord | null>(null)
+const tab = browserTab(),
+  router = useRouter(),
+  route = useRoute()
+let documentAbort: AbortController | undefined,
+  loadRequest = 0
 const editor = createTab().store
-useKeyboard()
 const EditorWorkspace = defineAsyncComponent(
   () => import('@/components/editor/EditorWorkspace.vue')
 )
@@ -64,6 +77,7 @@ function dispose() {
   if (disposed) return
   disposed = true
   abort.abort()
+  documentAbort?.abort()
   manifest.value = null
   editor.dispose()
 }
@@ -92,7 +106,7 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     credentials: 'same-origin',
     cache: 'no-store',
-    signal: abort.signal
+    signal: init.signal ?? abort.signal
   })
   if (!result.ok) throw new RequestError(result.status)
   return result.json() as Promise<T>
@@ -160,16 +174,45 @@ function open(record: FileRecord) {
   if (record.kind === 'folder') {
     parent.value = record.id
     void browse()
-  } else location.assign('/editor?id=' + encodeURIComponent(record.id))
+  } else if (remoteDeployment.value)
+    void router.push('/editor?id=' + encodeURIComponent(record.id))
+  else location.assign('/editor?id=' + encodeURIComponent(record.id))
 }
 function blockDrop(event: DragEvent) {
   event.preventDefault()
   event.stopImmediatePropagation()
 }
 function cancel() {
-  dispose()
-  location.assign('/')
+  if (remoteDeployment.value) void router.push('/')
+  else {
+    dispose()
+    location.assign('/')
+  }
 }
+function returnToList(event: MouseEvent) {
+  if (
+    remoteDeployment.value &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    event.button === 0
+  ) {
+    event.preventDefault()
+    void router.push('/')
+  }
+}
+function chooseRendering() {
+  try {
+    sessionStorage.setItem('portal.rendering', rendering.value)
+  } catch {}
+  remote.value = remoteDeployment.value && rendering.value === 'server'
+  if (viewing.value) void loadLocation()
+}
+watch(
+  () => route.fullPath,
+  () => {
+    if (me.value && remoteDeployment.value) void loadLocation()
+  }
+)
 onMounted(async () => {
   window.addEventListener('pagehide', pageHidden)
   window.addEventListener('pageshow', pageShown)
@@ -179,55 +222,24 @@ onMounted(async () => {
       authorization: string
       viewer: string
       mode: string
+      allowClientEditor: boolean
     }>('/auth/mode')
     provider.value = mode.provider
     authorization.value = mode.authorization
     native.value = mode.viewer === 'native'
-    remote.value = mode.viewer === 'selkies'
-    editable.value = remote.value && mode.mode === 'session-edit'
-    await refresh()
-    if (!viewing.value) return
-    const id = new URLSearchParams(location.search).get('id')
-    if (!id) throw new Error('缺少文件 ID')
-    const metadata = await api<FileRecord>(
-      '/api/files/' + encodeURIComponent(id)
-    )
-    name.value = metadata.name
-    await nextTick()
-    documentId.value = id
-    revision.value = metadata.revision
-    if (native.value) {
-      progress.value = '載入開發驗證場景'
-      const response = await fetch(
-        '/api/files/' + encodeURIComponent(id) + '/scene',
-        { credentials: 'same-origin', cache: 'no-store', signal: abort.signal }
-      )
+    remoteDeployment.value = mode.viewer === 'selkies'
+    allowClientEditor.value = mode.allowClientEditor
+    try {
       if (
-        response.headers.get('Content-Type') !== SCENE_TYPE ||
-        response.headers.get('X-Document-Revision') !== metadata.revision
+        allowClientEditor.value &&
+        sessionStorage.getItem('portal.rendering') === 'client'
       )
-        throw new Error('場景不可用或來源已變更')
-      const bytes = await readDownload(
-        response,
-        Number(response.headers.get('Content-Length')),
-        MAX_SCENE_BYTES,
-        abort.signal,
-        () => undefined
-      )
-      await loadScene(editor, bytes, metadata.name, abort.signal, (phase) => {
-        progress.value = phase
-      })
-    } else if (!remote.value) {
-      progress.value = '伺服器準備預覽'
-      manifest.value = await api<ViewerManifest>(
-        '/api/files/' +
-          encodeURIComponent(id) +
-          '/viewer?revision=' +
-          encodeURIComponent(metadata.revision)
-      )
-    }
-    ready.value = true
-    progress.value = ''
+        rendering.value = 'client'
+    } catch {}
+    remote.value = remoteDeployment.value && rendering.value === 'server'
+    editable.value = remoteDeployment.value && mode.mode === 'session-edit'
+    await refresh()
+    await loadLocation()
   } catch (err) {
     if (abort.signal.aborted) return
     if (err instanceof RequestError && err.status === 401 && !me.value) {
@@ -238,6 +250,87 @@ onMounted(async () => {
     if (!me.value && viewing.value) location.replace('/')
   }
 })
+async function loadLocation() {
+  const request = ++loadRequest
+  documentAbort?.abort()
+  const loading = new AbortController()
+  documentAbort = loading
+  viewing.value = location.pathname === '/editor'
+  error.value = ''
+  ready.value = false
+  progress.value = ''
+  try {
+    if (!viewing.value) {
+      if (!roots.value.length)
+        roots.value = (await api<{ items: FileRecord[] }>('/api/roots')).items
+      if (!parent.value) parent.value = roots.value[0]?.id ?? ''
+      await browse()
+      return
+    }
+    const id = new URLSearchParams(location.search).get('id')
+    if (!id) throw new Error('缺少文件 ID')
+    const metadata = await api<FileRecord>(
+      '/api/files/' + encodeURIComponent(id),
+      { signal: loading.signal }
+    )
+    if (request !== loadRequest) return
+    name.value = metadata.name
+    selectedDocument.value = metadata
+    await nextTick()
+    documentId.value = id
+    revision.value = metadata.revision
+    if (native.value) {
+      progress.value = '載入開發驗證場景'
+      const response = await fetch(
+        '/api/files/' + encodeURIComponent(id) + '/scene',
+        {
+          credentials: 'same-origin',
+          cache: 'no-store',
+          signal: loading.signal
+        }
+      )
+      if (
+        response.headers.get('Content-Type') !== SCENE_TYPE ||
+        response.headers.get('X-Document-Revision') !== metadata.revision
+      )
+        throw new Error('場景不可用或來源已變更')
+      const bytes = await readDownload(
+        response,
+        Number(response.headers.get('Content-Length')),
+        MAX_SCENE_BYTES,
+        loading.signal,
+        () => undefined
+      )
+      await loadScene(editor, bytes, metadata.name, loading.signal, (phase) => {
+        progress.value = phase
+      })
+    } else if (!remote.value && rendering.value !== 'client') {
+      progress.value = '伺服器準備預覽'
+      manifest.value = await api<ViewerManifest>(
+        '/api/files/' +
+          encodeURIComponent(id) +
+          '/viewer?revision=' +
+          encodeURIComponent(metadata.revision)
+      )
+    }
+    ready.value = true
+    if (remote.value) remoteStarted.value = true
+    progress.value = ''
+  } catch (err) {
+    if (
+      abort.signal.aborted ||
+      loading.signal.aborted ||
+      request !== loadRequest
+    )
+      return
+    if (err instanceof RequestError && err.status === 401 && !me.value) {
+      if (viewing.value) location.replace('/')
+      return
+    }
+    error.value = err instanceof Error ? err.message : '無法開啟'
+    if (!me.value && viewing.value) location.replace('/')
+  }
+}
 onUnmounted(() => {
   window.removeEventListener('pagehide', pageHidden)
   window.removeEventListener('pageshow', pageShown)
@@ -253,7 +346,9 @@ onUnmounted(() => {
     <header
       class="flex shrink-0 items-center gap-4 border-b border-border px-5 py-3"
     >
-      <a href="/" class="font-semibold">OpenPencil · LAN Portal</a>
+      <a href="/" class="font-semibold" @click="returnToList"
+        >OpenPencil · LAN Portal</a
+      >
       <span v-if="viewing" data-test-id="portal-document-name">{{ name }}</span>
       <span class="rounded border border-border px-2 py-1 text-xs">{{
         editable ? '會話編輯 · 不儲存' : '唯讀'
@@ -268,6 +363,28 @@ onUnmounted(() => {
         >來源：{{ me?.authorization === 'mock' ? 'Mock fixture' : 'NAS' }} ·
         讀取完成</span
       >
+      <label
+        v-if="me && allowClientEditor"
+        class="flex items-center gap-2 text-sm"
+      >
+        開啟方式
+        <select
+          v-model="rendering"
+          aria-label="開啟方式"
+          class="rounded border border-border bg-panel px-2 py-1"
+          @change="chooseRendering"
+        >
+          <option value="server">伺服器畫面</option>
+          <option value="client">瀏覽器編輯器</option>
+        </select>
+      </label>
+      <button
+        v-if="viewing && remoteDeployment"
+        class="rounded border border-border px-3 py-1"
+        @click="cancel"
+      >
+        返回文件列表
+      </button>
       <span class="ml-auto text-sm">{{ me?.email }}</span>
       <button
         v-if="me"
@@ -452,14 +569,31 @@ onUnmounted(() => {
         :document-id="documentId"
         :revision="revision"
       />
-      <RemoteViewer
-        v-else-if="remote && documentId && me"
-        :editable="editable"
-        :document-id="documentId"
-        :csrf="me.csrf"
+      <ClientEditor
+        v-else-if="
+          allowClientEditor &&
+          rendering === 'client' &&
+          selectedDocument &&
+          me &&
+          ready
+        "
+        :key="selectedDocument.id + selectedDocument.revision"
+        :document="selectedDocument"
+        :max-file-bytes="me.maxFileBytes"
       />
-      <EditorWorkspace v-else-if="native" />
+      <template v-else-if="native">
+        <EditorWorkspace />
+        <EditorKeyboard v-if="ready" />
+      </template>
     </template>
+    <RemoteViewer
+      v-if="remote && remoteStarted && documentId && me"
+      v-show="viewing"
+      :editable="editable"
+      :document-id="documentId"
+      :csrf="me.csrf"
+      :tab="tab"
+    />
     <AppAlert
       v-if="error"
       :description="error"

@@ -51,7 +51,7 @@ COPY deploy/selkies/versions.json /app/versions.json
 LABEL org.opencontainers.image.title="OpenPencil LAN Portal" \
       org.opencontainers.image.version="0.1.0" \
       portal.features="raster,selkies" \
-      portal.upstream.sha="e4ef22826ff238bba57eeeb7bc769d4a2d355ce1"
+      portal.upstream.sha="ff8ba15fd604f74a4c20493cf143fa08625093f0"
 ENV NODE_ENV=production PORTAL_CONFIG=/config/config.json PYTHON_BIN=python3 \
     HOME=/state/remote START_DOCKER=false PIXELFLUX_WAYLAND=false
 USER 10001:10001

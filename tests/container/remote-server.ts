@@ -8,7 +8,8 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync, readdirSync, mkdirSync } from 'node:fs'
 const port = Number(process.env.FIXTURE_PORT ?? 3000)
 const fixture = await createGoogleFixture('/state/synthetic', port, {
-  viewerMode: 'selkies'
+  viewerMode: 'selkies',
+  maxSessions: 2
 })
 const app = new Hono()
 const zooms = new Map<string, number>()
@@ -19,6 +20,8 @@ app.get('/__fixture/status', (c) =>
     leases: fixture.portal.remote?.leases.map((lease) => ({
       id: lease.id,
       slot: lease.slot,
+      file: lease.file.name,
+      generation: lease.generation,
       zoom: zooms.get(lease.id)
     })),
     ready: fixture.portal.remote?.leases[0]?.ready,

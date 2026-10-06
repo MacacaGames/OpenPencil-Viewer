@@ -627,3 +627,188 @@ async function testConcurrentSessions(t: TestContext, firstUser: number) {
     rmSync(base, { recursive: true, force: true })
   }
 }
+
+test('Tab API reuses a full-capacity lease, scopes stream cookies, cancels stale/pending opens and gates client FIG access', async () => {
+  const base = realpathSync(mkdtempSync(resolve(tmpdir(), 'portal-tab-api-')))
+  let starts = 0,
+    reloads = 0
+  const fixture = await createGoogleFixture(base, 3218, {
+    viewerMode: 'selkies',
+    maxSessions: 2,
+    allowClientEditor: true,
+    remoteWorker: () => ({
+      corePath: '/unused',
+      streamUrl: 'http://127.0.0.1:8086',
+      start: async (lease) => {
+        starts++
+        mkdirSync(base + '/remote/' + lease.id, { recursive: true })
+      },
+      reload: async () => {
+        reloads++
+      },
+      stop: async () => undefined
+    })
+  })
+  const request = (path: string, init: RequestInit = {}) =>
+    fixture.portal.app.request(fixture.config.origin + path, init)
+  try {
+    const start = await request('/auth/google/start'),
+      url = new URL(start.headers.get('location')!)
+    const login = await request(
+      '/auth/google/callback?' +
+        new URLSearchParams({
+          state: url.searchParams.get('state')!,
+          code: fixtureCode(url, 'A')
+        }),
+      { headers: { Cookie: start.headers.getSetCookie()[0].split(';')[0] } }
+    )
+    const cookie = login.headers
+      .getSetCookie()
+      .find((value) => value.startsWith('portal='))!
+      .split(';')[0]
+    const me = await (
+      await request('/api/me', { headers: { Cookie: cookie } })
+    ).json()
+    const headers = {
+      Cookie: cookie,
+      Origin: fixture.config.origin,
+      'X-CSRF-Token': me.csrf,
+      'Content-Type': 'application/json'
+    }
+    const tab = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
+      other = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb'
+    const open = async (name: string, tab: string, sequence: number) => {
+      const response = await request(
+        `/api/files/${fileId('designs', name)}/remote`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            width: 1280,
+            height: 720,
+            dpr: 1,
+            uiScale: 1.25,
+            tab,
+            request: sequence
+          })
+        }
+      )
+      return { response, body: await response.json() }
+    }
+    const close = (tab: string, sequence: number) =>
+      request(`/api/remote-tab/${tab}/stop`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ request: sequence })
+      })
+    const a = await open('A.fig', tab, 1),
+      b = await open('B.fig', other, 1)
+    assert.equal(a.response.status, 200)
+    assert.equal(b.response.status, 200)
+    assert.notEqual(
+      a.response.headers.getSetCookie()[0].split('=')[0],
+      b.response.headers.getSetCookie()[0].split('=')[0]
+    )
+    const switched = await open('B.fig', tab, 2)
+    assert.equal(switched.response.status, 200)
+    assert.equal(switched.body.id, a.body.id)
+    assert.deepEqual([starts, reloads], [2, 1])
+    assert.equal((await close(tab, 1)).status, 200)
+    assert.equal(fixture.portal.remote!.leases.length, 2)
+    const lease = fixture.portal.remote!.leases.find(
+      (lease) => lease.id === a.body.id
+    )!
+    const metadata = await (
+      await fixture.portal.internalApp.request(
+        `http://127.0.0.1/_remote/${lease.ticket}/metadata`
+      )
+    ).json()
+    assert.equal(metadata.name, 'B.fig')
+    assert.equal(metadata.generation, 2)
+    assert.equal(
+      (
+        await fixture.portal.internalApp.request(
+          `http://127.0.0.1/_remote/${lease.ticket}/ready`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ready: true, generation: 1 })
+          }
+        )
+      ).status,
+      409
+    )
+    assert.equal(
+      (
+        await request(a.body.url, {
+          headers: {
+            Cookie:
+              cookie + '; ' + b.response.headers.getSetCookie()[0].split(';')[0]
+          }
+        })
+      ).status,
+      401
+    )
+    const id = fileId('designs', 'A.fig'),
+      document = await (await request(`/api/files/${id}`, { headers })).json()
+    const path = `/api/files/${id}/client-content?revision=${encodeURIComponent(document.revision)}`
+    assert.equal((await request(path)).status, 401)
+    assert.equal(
+      (await request(`/api/files/${id}/content`, { headers })).status,
+      410
+    )
+    assert.equal(
+      (await request(`/api/files/${id}/scene`, { headers })).status,
+      410
+    )
+    assert.equal(
+      (
+        await request(`/api/files/${id}/client-content?revision=stale`, {
+          headers
+        })
+      ).status,
+      409
+    )
+    assert.equal(
+      (await request(path, { headers: { ...headers, Range: 'bytes=0-1' } }))
+        .status,
+      416
+    )
+    const bytes = await request(path, { headers })
+    assert.equal(bytes.status, 200)
+    assert.equal(bytes.headers.get('Cache-Control'), 'no-store')
+    assert.deepEqual(
+      Buffer.from(await bytes.arrayBuffer()),
+      readFileSync('tests/fixtures/basic.fig')
+    )
+    fixture.config.allowClientEditor = false
+    assert.equal((await request(path, { headers })).status, 410)
+    assert.equal(
+      (
+        await request(`/api/remote-tab/${tab}/stop`, {
+          method: 'POST',
+          headers: {
+            Cookie: cookie,
+            Origin: fixture.config.origin,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ request: 2 })
+        })
+      ).status,
+      403
+    )
+    assert.equal((await close(tab, 3)).status, 200)
+    const canceled = await open('A.fig', tab, 3)
+    assert.equal(canceled.response.status, 409)
+    assert.deepEqual(
+      fixture.portal.remote!.leases.map((lease) => lease.id),
+      [b.body.id]
+    )
+    assert.equal((await close(other, 1)).status, 200)
+    assert.equal(fixture.portal.remote!.leases.length, 0)
+  } finally {
+    await fixture.portal.remote?.close()
+    fixture.close()
+    rmSync(base, { recursive: true, force: true })
+  }
+})

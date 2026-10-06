@@ -5,7 +5,10 @@ import type { Editor } from '@open-pencil/core/editor'
 let surfaces = 0,
   resizes = 0,
   draws = 0,
-  destroys = 0
+  destroys = 0,
+  contextDeletes = 0
+const releasedHandles: number[] = []
+const releasedCanvases: Array<HTMLCanvasElement | null> = []
 const fontCallbacks: Array<() => void> = []
 class Renderer {
   imagePreviews = { setDecoder: () => undefined }
@@ -30,9 +33,27 @@ mock.module(
       canvas.width = canvas.clientWidth
       canvas.height = canvas.clientHeight
     },
-    makeGLSurface: () => {
+    makeGLSurface: (
+      _ck: CanvasKit,
+      _canvas: HTMLCanvasElement,
+      _options: unknown,
+      existingContext: { delete(): void } | null
+    ) => {
       surfaces++
-      return { surface: {}, glContext: { delete() {} }, presentation: 'srgb' }
+      return {
+        surface: {},
+        glContext: existingContext ?? { delete: () => contextDeletes++ },
+        glHandle: existingContext ? null : surfaces,
+        presentation: 'srgb'
+      }
+    },
+    releaseWebGLContext: (
+      _ck: CanvasKit,
+      handle: number,
+      canvas: HTMLCanvasElement | null
+    ) => {
+      releasedHandles.push(handle)
+      releasedCanvases.push(canvas)
     }
   })
 )
@@ -101,6 +122,9 @@ test('surface lifecycle skips unchanged and hidden sizes; all font callbacks sch
     for (const frame of callbacks) frame(0)
     expect(draws).toBe(2)
     manager.destroy()
+    expect(contextDeletes).toBe(1)
+    expect(releasedHandles).toEqual([1])
+    expect(releasedCanvases).toEqual([canvas])
     callback()
     expect(frames.size).toBe(0)
   } finally {

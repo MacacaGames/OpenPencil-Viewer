@@ -3,3 +3,4 @@
 0003-renderer-memory.patch
 0004-remote-desktop.patch
 0005-session-edit.patch
+0006-client-editor-worker.patch

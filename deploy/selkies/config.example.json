@@ -29,6 +29,8 @@
     "maxWidth": 1920,
     "maxHeight": 1080,
     "maxPixels": 2073600,
-    "maxDpi": 192
-  }
+    "maxDpi": 192,
+    "disconnectGraceMs": 3000
+  },
+  "allowClientEditor": false
 }

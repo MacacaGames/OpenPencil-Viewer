@@ -120,10 +120,10 @@ index 0887d25b0..3e66e9ab1 100644
    const byId = computed(() => new Map(nodes.value.map((node) => [node.id, node])))
    const node = computed(() => (nodes.value.length === 1 ? nodes.value[0] : null))
 diff --git a/src/App.vue b/src/App.vue
-index 7b87b582b..5b5d6d63e 100644
+index 2ba2bf4..2b5466b 100644
 --- a/src/App.vue
 +++ b/src/App.vue
-@@ -12,19 +12,13 @@ import { useEditorStore } from '@/app/editor/active-store'
+@@ -12,18 +12,12 @@ import { useFollowingEditorStore } from '@/app/editor/active-store'
  import { animationsEnabled } from '@/app/shell/motion'
  import { useAppTheme } from '@/app/shell/theme'
  import { toast } from '@/app/shell/ui'
@@ -138,13 +138,12 @@ index 7b87b582b..5b5d6d63e 100644
  import AppShell from '@/components/shell/AppShell.vue'
  import Toaster from '@/components/shell/Toaster.vue'
  
- const store = useEditorStore()
 -const { updates, locale } = useI18n()
 +const { locale } = useI18n()
  
  useHead({
    titleTemplate: (title) => (title ? `${title} — OpenPencil` : 'OpenPencil'),
-@@ -43,8 +37,6 @@ useEventListener(window, 'pagehide', () => {
+@@ -42,8 +36,6 @@ useEventListener(window, 'pagehide', () => {
  
  onMounted(() => {
    toast.setupGlobalErrorHandler()
@@ -153,7 +152,7 @@ index 7b87b582b..5b5d6d63e 100644
  })
  </script>
  
-@@ -54,11 +46,7 @@ onMounted(() => {
+@@ -53,11 +45,7 @@ onMounted(() => {
        <AppShell>
          <RouterView />
        </AppShell>
@@ -424,7 +423,7 @@ index 302bb91cd..eafb6b522 100644
              WEB_FONT_PROVIDER_IDS.map((provider) => [
                provider,
 diff --git a/src/app/editor/session/create.ts b/src/app/editor/session/create.ts
-index e066c8f73..2d11e4eec 100644
+index 465c523..89865ef 100644
 --- a/src/app/editor/session/create.ts
 +++ b/src/app/editor/session/create.ts
 @@ -1,3 +1,4 @@
@@ -432,7 +431,7 @@ index e066c8f73..2d11e4eec 100644
  import { shallowReactive } from 'vue'
  
  import { createEditor } from '@open-pencil/core/editor'
-@@ -249,7 +250,7 @@ export function createEditorStore(initialGraph?: SceneGraph) {
+@@ -250,7 +251,7 @@ function buildEditorStore(initialGraph?: SceneGraph) {
  
    defineEditorStoreAccessors(store, editor)
  
@@ -440,7 +439,7 @@ index e066c8f73..2d11e4eec 100644
 +  return guardAppEditor(store)
  }
  
- export type EditorStore = ReturnType<typeof createEditorStore>
+ export const createEditorStore = scopedStoreFactory(buildEditorStore)
 diff --git a/src/app/shell/keyboard/clipboard.ts b/src/app/shell/keyboard/clipboard.ts
 index 0431377ab..2a9016a9b 100644
 --- a/src/app/shell/keyboard/clipboard.ts

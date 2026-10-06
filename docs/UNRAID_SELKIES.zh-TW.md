@@ -58,7 +58,29 @@ flowchart LR
 
 外部 `/scene`、`/content` 繼續回應 410。內部文件路由只存在另一個 loopback listener；公開 listener 的 `/_remote/*`、`/remote-desktop` 回應 404。內部 ticket 與活動會話、Portal session、文件 revision 綁定，讀取前後重新驗證。不能把 8085 或 8086–8093 發布到主機或代理。
 
-外部瀏覽器使用官方 Selkies core 解碼 H.264；不解析 FIG、不接收 scene、不建立 OpenPencil 文件 graph。原生 UI 在伺服器 Chromium 内運作，切頁、縮放與平移使用保留的 renderer、圖片與字體狀態。內部 scene cache 有 64MiB 上限，超過上限的文件在重新建立會話時可能重新解析；現有原生圖片 cache 上限沿用 adapter，不是整個程序或 VRAM 上限。
+外部瀏覽器在伺服器畫面模式使用官方 Selkies core 解碼 H.264；不解析 FIG、不接收 scene、不建立 OpenPencil 文件 graph。原生 UI 在伺服器 Chromium 内運作，切頁、縮放與平移使用保留的 renderer、圖片與字體狀態。內部 scene cache 有 64MiB 上限，超過上限的文件在重新建立會話時可能重新解析；現有原生圖片 cache 上限沿用 adapter，不是整個程序或 VRAM 上限。
+
+## 會話上限與用戶端模式選擇
+
+修改 Docker 實際掛載到 `/config/config.json` 的主機 JSON，保留其他既有欄位：
+
+```json
+{
+  "mode": "session-edit",
+  "viewerMode": "selkies",
+  "allowClientEditor": true,
+  "remote": {
+    "maxSessions": 4,
+    "disconnectGraceMs": 3000
+  }
+}
+```
+
+以上是需合併的欄位，不是完整 config；`remote` 原有 runtimePath／ports／解析度欄位也要保留。變更後由操作員重新啟動／重建容器；本次程式修正需使用包含它的新映像。`maxSessions` 是整個容器可同時使用的遠端分頁數，允許1–8、預設4；兩個分頁即算兩個會話，同一分頁切檔不增加會話。回到文件列表仍保留該分頁的遠端會話，讓再次開檔沿用它；關閉分頁、登出或改用瀏覽器編輯器會釋放。
+
+`allowClientEditor` 省略或false時只保留原有伺服器畫面。設true後，頁面「開啟方式」可選「伺服器畫面」或「瀏覽器編輯器」，選擇保留在目前分頁。此開關只接受已核准的`selkies`＋`session-edit`＋`google-mount`設定，不開啟尚未驗收的DSM權限模式。
+
+伺服器畫面只傳H.264與操作；瀏覽器編輯器會透過已登入且重新授權、revision吻合的`/client-content`取得完整FIG，由瀏覽器worker解析並保留原生OpenPencil UI，不占遠端slot。原有`/content`與公開`/scene`仍回410。這個選項明確允許完整文件內容進入用戶端；修改仍只在記憶體，不儲存草稿、不匯出、不寫回NAS，關頁或重新載入清除修改。瀏覽器模式的記憶體與解析能力由使用者設備承擔，大檔適用性需現場量測。
 
 ## 部署參數與手動步驟
 
@@ -251,13 +273,13 @@ Unraid手動量測每個檔案至少冷開、同會話切頁與連續縮放／�
 
 ## 會話、編輯與來源完整性驗收
 
-`remote.maxSessions` 省略時預設4，允許1–8；設為1可回復單人容量。每個Portal登入工作階段最多開一份文件。每次新會話有獨立Chromium profile、X display與encoder；不同使用者可同時開同一份FIG，各自縮放、平移與暫存修改互不影響。stream cookie有效90秒，與Portal session及lease綁定；每30秒renew不延長Portal idle expiry。WS握手驗證Origin／雙cookie，1秒watchdog檢查session/文件/worker；斷線15秒清理。登出／撤銷／到期只終止本人的stream，TERM/KILL子程序並刪除profile。關閉中的slot須等清理完成才可再次使用。
+`remote.maxSessions` 省略時預設4，允許1–8；設為1可回復單人容量。每個瀏覽器分頁保留一個遠端會話；同一分頁從列表切換不同文件沿用同一Chromium profile、X display與encoder，切檔清除上一份文件的暫存編輯。同一登入可以開不同分頁，各分頁各算一個slot並使用獨立stream cookie；不同使用者可同時開同一份FIG，各自縮放、平移與暫存修改互不影響。stream cookie有效90秒，與Portal session及lease綁定；每30秒renew不延長Portal idle expiry。WS握手驗證Origin／雙cookie，1秒watchdog檢查session/文件/worker；正常關閉分頁用keepalive主動釋放，啟動中取消也能回收；異常WS斷線預設3秒寬限後由1秒watchdog清理（`remote.disconnectGraceMs`允許1000–15000，首次連線仍有15秒啟動寬限）。無pong的網路中斷另由WS heartbeat在約15秒內識別。登出／撤銷／到期只終止本人的stream，TERM/KILL子程序並刪除profile。關閉中的slot須等清理完成才可再次使用。
 
 Selkies proxy轉送頁面/zoom/pan操作與ACK；session-edit另允許文字、刪除、undo/redo與編輯快捷鍵，以每條WS的modifier狀態阻擋瀏覽器／桌面逃逸快捷鍵。阻擋命令、剪貼簿、檔案傳輸、音訊、webcam與二進位上傳，其他HTTP路由不代理。Chromiumpolicy停用下載／列印／檔案選擇／DevTools／外部URL／擴充套件。native adapter在read-only保留graph immutability；session-edit保留可變記憶體graph並啟用屬性面板、頁面新增／更名與原生編輯。兩種模式均禁止save/autosave/export/source binding/external document traffic，IndexedDB改成每次會話的記憶體實作，避免上游帳密store初始化錯誤與文件落盤。
 
 手動驗收：
 
-- 未登入不能開stream HTML、core或WS；錯Origin／到期credential／其他使用者不能接線，重複開啟收到busy。
+- 未登入不能開stream HTML、core或WS；錯Origin／到期credential／其他使用者不能接線；同一分頁切檔沿用同一lease ID，只有其他分頁已占满容量才收到busy。
 - 開文件前後核對原FIG SHA256及mtime；`rw`掛載時也須在UI編輯後保持不變。DevTools中外部頁面只有文件列表、stream core與WS，沒有FIG或scene response。
 - session-edit能新增／更名頁面、修改屬性與文字、刪除物件及undo/redo；Ctrl+S與匯出不得保存資料，重新載入應恢復原FIG。
 - 切頁、縮放、平移、全螢幕、DPI及視窗resize正常；確認遠端xrandr尺寸跟隨且受上限約束，沒有持續拉伸固定桌面。

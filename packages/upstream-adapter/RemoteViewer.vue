@@ -2,10 +2,12 @@
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 import type { RemoteDisplay } from '../contracts/remote-display'
+import { nextTabRequest } from './browser-tab'
 const props = defineProps<{
   documentId: string
   csrf: string
   editable: boolean
+  tab: string
 }>()
 const frame = ref<HTMLIFrameElement | null>(null),
   container = ref<HTMLDivElement | null>(null),
@@ -17,6 +19,8 @@ const frame = ref<HTMLIFrameElement | null>(null),
 let lease = '',
   timer: ReturnType<typeof setInterval> | undefined,
   disposed = false
+let request = 0,
+  opening = false
 let observer: ResizeObserver | undefined,
   resizeTimer: ReturnType<typeof setTimeout> | undefined,
   display: RemoteDisplay | undefined,
@@ -35,6 +39,15 @@ async function action(name: string, keepalive = false) {
     keepalive
   })
 }
+function release(sequence: number, keepalive = false) {
+  return fetch(`/api/remote-tab/${props.tab}/stop`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    keepalive,
+    headers: { 'X-CSRF-Token': props.csrf, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ request: sequence })
+  }).catch(() => undefined)
+}
 function dispose() {
   if (disposed) return
   disposed = true
@@ -44,7 +57,7 @@ function dispose() {
   observer?.disconnect()
   url.value = ''
   frame.value?.remove()
-  if (lease) void action('stop', true).catch(() => undefined)
+  if (request) void release(request, true)
 }
 function fullscreen() {
   void container.value?.requestFullscreen()
@@ -75,7 +88,10 @@ function fitScreen() {
   send({ type: 'settings', settings: { scaling_dpi: display.dpi } })
 }
 async function syncDisplay() {
-  if (!lease || disposed) return
+  if (!lease || disposed || opening) return
+  const size = viewport.value?.getBoundingClientRect()
+  // The file list hides this retained stream; keep its native canvas renderable.
+  if (!size || size.width < 64 || size.height < 64) return
   if (updating) {
     dirty = true
     return
@@ -123,12 +139,27 @@ watch(uiScale, () => {
   } catch {}
   queueResize()
 })
-onMounted(async () => {
+onMounted(() => {
   window.addEventListener('pagehide', dispose)
   window.addEventListener('message', coreMessage)
   window.addEventListener('resize', queueResize)
   observer = new ResizeObserver(queueResize)
   if (viewport.value) observer.observe(viewport.value)
+  void openDocument()
+})
+watch(
+  () => props.documentId,
+  () => void openDocument()
+)
+async function openDocument() {
+  if (!props.documentId || disposed) return
+  if (opening && request) void release(request)
+  const sequence = nextTabRequest(props.tab, request)
+  request = sequence
+  opening = true
+  clearInterval(timer)
+  error.value = ''
+  progress.value = lease ? '切換文件' : '伺服器準備會話'
   try {
     const response = await fetch(
       `/api/files/${encodeURIComponent(props.documentId)}/remote`,
@@ -139,26 +170,29 @@ onMounted(async () => {
           'X-CSRF-Token': props.csrf,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(requestedDisplay()),
-        signal: abort.signal
+        body: JSON.stringify({
+          ...requestedDisplay(),
+          tab: props.tab,
+          request: sequence
+        })
       }
     )
     if (!response.ok) {
       const body = await response.json()
       throw new Error(
         body.error === 'remote-busy'
-          ? '遠端會話已達上限，或您已有開啟的會話，請關閉後再試。'
+          ? '遠端會話已達上限，請關閉其他分頁的遠端會話後再試。'
           : '遠端會話無法啟動，請查看伺服器日誌。'
       )
     }
     const result: { id: string; url: string; display: RemoteDisplay } =
       await response.json()
-    lease = result.id
-    display = result.display
-    if (disposed) {
-      void action('stop')
+    if (disposed || sequence !== request) {
+      void release(sequence, true)
       return
     }
+    lease = result.id
+    display = result.display
     url.value = result.url
     queueResize()
     progress.value = ''
@@ -171,12 +205,14 @@ onMounted(async () => {
       }
     }, 30000)
   } catch (cause) {
-    if (!disposed) {
+    if (!disposed && sequence === request) {
       progress.value = ''
       error.value = cause instanceof Error ? cause.message : '無法開啟'
     }
+  } finally {
+    if (sequence === request) opening = false
   }
-})
+}
 onUnmounted(() => {
   window.removeEventListener('pagehide', dispose)
   window.removeEventListener('message', coreMessage)

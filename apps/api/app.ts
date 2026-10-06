@@ -9,6 +9,7 @@ import { ViewerRenderer } from './viewer.ts'
 import {
   RemoteSessions,
   remoteErrorCode,
+  remoteCookieName,
   type RemoteWorker
 } from './remote-sessions.ts'
 import { LocalRemoteWorker } from './remote-worker.ts'
@@ -277,9 +278,8 @@ export function createPortal(
   const requireOrigin = (origin: string | undefined) => {
     if (origin !== config.origin) throw new AppError('origin-rejected', 403)
   }
-  const streamCookie = config.origin.startsWith('https:')
-    ? '__Host-portal-stream'
-    : 'portal-stream'
+  const streamCookie = (id: string) =>
+    remoteCookieName(config.origin.startsWith('https:'), id)
   const streamCookieOptions = {
     ...cookieOptions,
     sameSite: 'Strict' as const,
@@ -302,7 +302,8 @@ export function createPortal(
             await index.stat(record)
           },
           Date.now,
-          config.remote!.maxSessions
+          config.remote!.maxSessions,
+          config.remote!.disconnectGraceMs
         )
       : undefined
   const internalApp = new Hono()
@@ -326,6 +327,7 @@ export function createPortal(
     return c.json({
       name: lease.file.name,
       revision: lease.file.revision,
+      generation: lease.generation,
       mode: config.mode,
       display: lease.display
     })
@@ -340,6 +342,12 @@ export function createPortal(
     if (!lease) throw new AppError('not-found', 404)
     const record = lease.file,
       key = record.id + ':' + record.revision
+    const generation = lease.generation
+    if (
+      c.req.query('generation') &&
+      Number(c.req.query('generation')) !== generation
+    )
+      throw new AppError('remote-superseded', 409)
     let packed = scenes.get(key)
     const begin = performance.now()
     if (!packed) {
@@ -382,6 +390,8 @@ export function createPortal(
       }
     }
     await remote!.internal(lease.ticket)
+    if (lease.generation !== generation)
+      throw new AppError('remote-superseded', 409)
     console.log(
       JSON.stringify({
         event: 'remote-scene',
@@ -407,6 +417,8 @@ export function createPortal(
       const lease = await remote?.internal(c.req.param('ticket'))
       if (!lease || !config.remote) throw new AppError('not-found', 404)
       const data = await c.req.json()
+      if (data.generation !== lease.generation)
+        throw new AppError('remote-superseded', 409)
       const timings = Object.fromEntries(
         [
           'sceneHydrationMs',
@@ -419,6 +431,7 @@ export function createPortal(
         ])
       )
       const result = {
+        generation: lease.generation,
         ready: data.ready === true,
         loadMs: Number(data.loadMs) || 0,
         timings
@@ -502,6 +515,8 @@ export function createPortal(
       provider: config.identityProvider,
       authorization: config.authorizationMode,
       mode: config.mode,
+      allowClientEditor: config.allowClientEditor,
+      maxSessions: config.remote?.maxSessions,
       viewer:
         config.viewerMode === 'selkies'
           ? 'selkies'
@@ -594,8 +609,11 @@ export function createPortal(
     if (c.req.header('X-CSRF-Token') !== session.csrf)
       throw new AppError('csrf-rejected', 403)
     state.revoke(session.id)
+    const leases =
+      remote?.leases.filter((lease) => lease.owner === session.id) ?? []
     await remote?.stopOwner(session.id, 'logout')
-    deleteCookie(c, streamCookie, streamCookieOptions)
+    for (const lease of leases)
+      deleteCookie(c, streamCookie(lease.id), streamCookieOptions)
     deleteCookie(c, cookieName, cookieOptions)
     return c.json({ ok: true })
   })
@@ -626,19 +644,60 @@ export function createPortal(
     const record = await authorize(principal, c.req.param('id'))
     if (record.kind !== 'file') throw new AppError('not-found', 404)
     await index.stat(record)
-    let display
+    let display, data
     try {
+      data = c.req.header('Content-Type')?.includes('application/json')
+        ? await c.req.json()
+        : undefined
+      const input = data
+        ? Object.fromEntries(
+            Object.entries(data).filter(
+              ([key]) => key !== 'tab' && key !== 'request'
+            )
+          )
+        : undefined
       display = remoteDisplay(
-        c.req.header('Content-Type')?.includes('application/json')
-          ? await c.req.json()
-          : { width: 1920, height: 1080, dpr: 1, uiScale: 1.25 },
+        input ? input : { width: 1920, height: 1080, dpr: 1, uiScale: 1.25 },
         config.remote!
       )
     } catch {
       throw new AppError('invalid-display', 400)
     }
-    const lease = await remote.create(session.id, cookie!, record, display)
-    setCookie(c, streamCookie, lease.credential, streamCookieOptions)
+    const tab = data?.tab,
+      request = data?.request
+    if (
+      tab !== undefined &&
+      (!/^[a-f0-9-]{36}$/.test(tab) ||
+        !Number.isSafeInteger(request) ||
+        request < 1)
+    )
+      throw new AppError('invalid-tab', 400)
+    const cancelOpen = () => {
+      if (tab !== undefined)
+        void remote.stopTab(session.id, tab, request).catch(() => undefined)
+    }
+    if (c.req.raw.signal.aborted) {
+      cancelOpen()
+      throw new AppError('remote-superseded', 409)
+    }
+    c.req.raw.signal.addEventListener('abort', cancelOpen, { once: true })
+    let lease
+    try {
+      lease =
+        tab === undefined
+          ? await remote.create(session.id, cookie!, record, display)
+          : await remote.openTab(
+              session.id,
+              cookie!,
+              record,
+              display,
+              tab,
+              request
+            )
+    } finally {
+      c.req.raw.signal.removeEventListener('abort', cancelOpen)
+    }
+    setCookie(c, streamCookie(lease.id), lease.credential, streamCookieOptions)
     return c.json({
       id: lease.id,
       url: `/stream/${lease.id}/`,
@@ -646,16 +705,50 @@ export function createPortal(
       display: lease.display
     })
   })
+  app.post('/api/remote-tab/:tab/stop', displayBody, async (c) => {
+    if (!remote) throw new AppError('remote-disabled', 404)
+    requireOrigin(c.req.header('Origin'))
+    const { session } = await identify(getCookie(c, cookieName), false)
+    if (c.req.header('X-CSRF-Token') !== session.csrf)
+      throw new AppError('csrf-rejected', 403)
+    const tab = c.req.param('tab'),
+      data = await c.req.json()
+    if (
+      !/^[a-f0-9-]{36}$/.test(tab) ||
+      !Number.isSafeInteger(data.request) ||
+      data.request < 1
+    )
+      throw new AppError('invalid-tab', 400)
+    const leases = remote.leases.filter(
+      (lease) =>
+        lease.owner === session.id &&
+        lease.tab === tab &&
+        (lease.request ?? 0) <= data.request
+    )
+    await remote.stopTab(session.id, tab, data.request)
+    for (const lease of leases)
+      deleteCookie(c, streamCookie(lease.id), streamCookieOptions)
+    return c.json({ ok: true })
+  })
   app.post('/api/remote/:id/:action', displayBody, async (c) => {
     if (!remote) throw new AppError('remote-disabled', 404)
     requireOrigin(c.req.header('Origin'))
     const { session } = await identify(getCookie(c, cookieName), false)
     if (c.req.header('X-CSRF-Token') !== session.csrf)
       throw new AppError('csrf-rejected', 403)
+    if (c.req.param('action') === 'stop') {
+      await remote.stopOwned(
+        c.req.param('id'),
+        session.id,
+        getCookie(c, streamCookie(c.req.param('id')))
+      )
+      deleteCookie(c, streamCookie(c.req.param('id')), streamCookieOptions)
+      return c.json({ ok: true })
+    }
     const lease = await remote.access(
       c.req.param('id'),
       session.id,
-      getCookie(c, streamCookie)
+      getCookie(c, streamCookie(c.req.param('id')))
     )
     if (c.req.param('action') === 'display') {
       try {
@@ -667,13 +760,13 @@ export function createPortal(
     }
     if (c.req.param('action') === 'renew') {
       remote.renew(lease)
-      setCookie(c, streamCookie, lease.credential, streamCookieOptions)
+      setCookie(
+        c,
+        streamCookie(lease.id),
+        lease.credential,
+        streamCookieOptions
+      )
       return c.json({ expires: lease.expires })
-    }
-    if (c.req.param('action') === 'stop') {
-      await remote.stop(lease.id)
-      deleteCookie(c, streamCookie, streamCookieOptions)
-      return c.json({ ok: true })
     }
     throw new AppError('not-found', 404)
   })
@@ -683,7 +776,11 @@ export function createPortal(
     let lease
     try {
       const { session } = await identify(getCookie(c, cookieName), false)
-      lease = await remote.access(id, session.id, getCookie(c, streamCookie))
+      lease = await remote.access(
+        id,
+        session.id,
+        getCookie(c, streamCookie(id))
+      )
     } catch (error) {
       console.log(
         JSON.stringify({
@@ -960,92 +1057,131 @@ export function createPortal(
       }
     })
   })
-  app.on(['GET', 'HEAD'], '/api/files/:id/content', async (c) => {
-    const { principal } = await identify(getCookie(c, cookieName))
-    const record = await authorize(principal, c.req.param('id'))
-    // Raw transport remains solely for existing development confinement probes.
-    if (config.environment === 'production' || config.viewerMode === 'selkies')
-      throw new AppError('raw-content-disabled', 410)
-    if (record.kind !== 'file') throw new AppError('not-found', 404)
-    if (c.req.method === 'HEAD') {
-      if (bridge) await bridge.stat(principal, record)
-      else if (authz.stat) await authz.stat(principal, record)
-      else await index.stat(record)
-      return new Response(null, {
-        headers: {
-          'Content-Length': String(record.size),
-          'Content-Type': 'application/octet-stream',
-          'Cache-Control': 'no-store'
+  app.on(
+    ['GET', 'HEAD'],
+    ['/api/files/:id/content', '/api/files/:id/client-content'],
+    async (c) => {
+      const { principal } = await identify(getCookie(c, cookieName))
+      const record = await authorize(principal, c.req.param('id'))
+      const clientEditor = c.req.path.endsWith('/client-content')
+      // Only the operator-enabled client editor may deliver the original FIG in production.
+      if (
+        clientEditor
+          ? !config.allowClientEditor
+          : config.environment === 'production' ||
+            config.viewerMode === 'selkies'
+      )
+        throw new AppError('raw-content-disabled', 410)
+      if (record.kind !== 'file') throw new AppError('not-found', 404)
+      if (clientEditor && c.req.query('revision') !== record.revision)
+        throw new AppError('source-changed', 409)
+      if (c.req.method === 'HEAD') {
+        if (bridge) await bridge.stat(principal, record)
+        else if (authz.stat) await authz.stat(principal, record)
+        else await index.stat(record)
+        return new Response(null, {
+          headers: {
+            'Content-Length': String(record.size),
+            'Content-Type': 'application/octet-stream',
+            'Cache-Control': 'no-store'
+          }
+        })
+      }
+      if (c.req.header('Range')) throw new AppError('range-not-supported', 416)
+      const active = principalDownloads.get(principal.key) ?? 0
+      if (downloads >= config.maxDownloads || active >= 1)
+        throw new AppError('download-busy', 429)
+      downloads++
+      principalDownloads.set(principal.key, active + 1)
+      const cancel = new AbortController()
+      const requestAbort = () => cancel.abort()
+      c.req.raw.signal.addEventListener('abort', requestAbort, { once: true })
+      try {
+        const source = bridge
+          ? await bridge.open(principal, record, cancel.signal)
+          : authz.open
+            ? await authz.open(principal, record, cancel.signal)
+            : await index.open(record, cancel.signal)
+        const stream = Readable.toWeb(source) as ReadableStream<Uint8Array>
+        const reader = stream.getReader()
+        let finished = false
+        let checkedAt = Date.now()
+        const finish = () => {
+          if (finished) return
+          finished = true
+          downloads--
+          principalDownloads.set(
+            principal.key,
+            (principalDownloads.get(principal.key) ?? 1) - 1
+          )
+          cancel.abort()
+          c.req.raw.signal.removeEventListener('abort', requestAbort)
         }
-      })
-    }
-    if (c.req.header('Range')) throw new AppError('range-not-supported', 416)
-    const active = principalDownloads.get(principal.key) ?? 0
-    if (downloads >= config.maxDownloads || active >= 1)
-      throw new AppError('download-busy', 429)
-    downloads++
-    principalDownloads.set(principal.key, active + 1)
-    const cancel = new AbortController()
-    const requestAbort = () => cancel.abort()
-    c.req.raw.signal.addEventListener('abort', requestAbort, { once: true })
-    try {
-      const source = bridge
-        ? await bridge.open(principal, record, cancel.signal)
-        : authz.open
-          ? await authz.open(principal, record, cancel.signal)
-          : await index.open(record, cancel.signal)
-      const stream = Readable.toWeb(source) as ReadableStream<Uint8Array>
-      const reader = stream.getReader()
-      let finished = false
-      const finish = () => {
-        if (finished) return
-        finished = true
+        const body = new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            try {
+              if (clientEditor && Date.now() - checkedAt >= 1000) {
+                const current = await identify(getCookie(c, cookieName), false)
+                const accessible = await authorize(current.principal, record.id)
+                if (accessible.revision !== record.revision)
+                  throw new AppError('source-changed', 409)
+                checkedAt = Date.now()
+              }
+              const part = await reader.read()
+              if (part.done) {
+                finish()
+                controller.close()
+              } else controller.enqueue(part.value)
+            } catch {
+              finish()
+              controller.error(new Error('source-changed-or-unavailable'))
+            }
+          },
+          async cancel() {
+            finish()
+            await reader.cancel()
+          }
+        })
+        state.audit(principal.key, record.id, 'read')
+        return new Response(body, {
+          headers: {
+            'Content-Length': String(record.size),
+            'Content-Type': 'application/octet-stream',
+            'Cache-Control': 'no-store',
+            'X-Document-Revision': record.revision,
+            ETag: 'W/"' + record.revision + '"'
+          }
+        })
+      } catch (error) {
         downloads--
-        principalDownloads.set(
-          principal.key,
-          (principalDownloads.get(principal.key) ?? 1) - 1
-        )
+        principalDownloads.set(principal.key, active)
         cancel.abort()
         c.req.raw.signal.removeEventListener('abort', requestAbort)
+        throw error
       }
-      const body = new ReadableStream<Uint8Array>({
-        async pull(controller) {
-          try {
-            const part = await reader.read()
-            if (part.done) {
-              finish()
-              controller.close()
-            } else controller.enqueue(part.value)
-          } catch {
-            finish()
-            controller.error(new Error('source-changed-or-unavailable'))
-          }
-        },
-        async cancel() {
-          finish()
-          await reader.cancel()
-        }
-      })
-      state.audit(principal.key, record.id, 'read')
-      return new Response(body, {
-        headers: {
-          'Content-Length': String(record.size),
-          'Content-Type': 'application/octet-stream',
-          'Cache-Control': 'no-store',
-          'X-Document-Revision': record.revision,
-          ETag: 'W/"' + record.revision + '"'
-        }
-      })
-    } catch (error) {
-      downloads--
-      principalDownloads.set(principal.key, active)
-      cancel.abort()
-      c.req.raw.signal.removeEventListener('abort', requestAbort)
-      throw error
     }
-  })
+  )
   app.all('/api/*', () => {
     throw new AppError('not-found', 404)
+  })
+  app.get('/readonly-runtime.js', (c) => {
+    if (!config.allowClientEditor) throw new AppError('not-found', 404)
+    return c.body(
+      readFileSync(config.webPath + '/../api/remote-memory.js'),
+      200,
+      {
+        'Content-Type': 'application/javascript'
+      }
+    )
+  })
+  app.on('GET', ['/', '/editor', '/index.html'], async (c, next) => {
+    if (!config.allowClientEditor) return next()
+    return c.html(
+      readFileSync(config.webPath + '/index.html', 'utf8').replace(
+        '<head>',
+        '<head><script src="/readonly-runtime.js"></script>'
+      )
+    )
   })
   app.use('/*', serveStatic({ root: config.webPath }))
   app.get('/*', serveStatic({ path: config.webPath + '/index.html' }))

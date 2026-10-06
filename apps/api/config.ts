@@ -11,6 +11,7 @@ const schema = v.strictObject({
   identityProvider: v.picklist(['mock', 'google-oidc']),
   authorizationMode: v.picklist(['mock', 'dsm-strict', 'google-mount']),
   viewerMode: v.optional(v.picklist(['raster', 'native', 'selkies'])),
+  allowClientEditor: v.optional(v.boolean(), false),
   remote: v.optional(
     v.strictObject({
       runtimePath: nonempty,
@@ -19,6 +20,10 @@ const schema = v.strictObject({
       maxSessions: v.optional(
         v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(8)),
         4
+      ),
+      disconnectGraceMs: v.optional(
+        v.pipe(v.number(), v.integer(), v.minValue(1000), v.maxValue(15000)),
+        3000
       ),
       maxWidth: v.pipe(
         v.number(),
@@ -88,6 +93,15 @@ export function parseConfig(raw: unknown): Config {
   const origin = new URL(config.origin)
   if (config.mode === 'session-edit' && config.viewerMode !== 'selkies')
     throw new Error('session-edit requires the isolated selkies application')
+  if (
+    config.allowClientEditor &&
+    (config.viewerMode !== 'selkies' ||
+      config.mode !== 'session-edit' ||
+      config.authorizationMode !== 'google-mount')
+  )
+    throw new Error(
+      'client editor requires explicit selkies session-edit/google-mount access'
+    )
   if (
     config.viewerMode === 'selkies' &&
     (config.authorizationMode !== 'google-mount' ||

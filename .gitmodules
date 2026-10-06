@@ -1,3 +1,4 @@
 [submodule "upstream/open-pencil"]
 	path = upstream/open-pencil
 	url = https://github.com/MacacaGames/open-pencil.git
+	branch = fix-image-reading-memory

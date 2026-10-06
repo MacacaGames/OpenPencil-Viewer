@@ -5,6 +5,7 @@ import {
 import type { EditorStore } from '@/app/editor/session'
 import { applyImportedDocument } from '@/app/document/io/imported-document'
 import { lockGraph } from './readonly'
+import type { SceneGraph } from '@open-pencil/scene-graph'
 export async function loadScene(
   editor: EditorStore,
   bytes: ArrayBuffer,
@@ -14,16 +15,55 @@ export async function loadScene(
   metrics?: (phase: string, elapsedMs: number) => void,
   editable = false
 ) {
+  const timeout = AbortSignal.any([signal, AbortSignal.timeout(60000)])
+  progress('載入場景')
+  const data = await unpackScene(bytes, timeout)
+  return presentGraph(
+    editor,
+    deserializeSceneGraph(data),
+    name,
+    timeout,
+    progress,
+    metrics,
+    editable
+  )
+}
+export async function loadFig(
+  editor: EditorStore,
+  bytes: ArrayBuffer,
+  name: string,
+  signal: AbortSignal,
+  progress: (phase: string) => void
+) {
+  const timeout = AbortSignal.any([signal, AbortSignal.timeout(60000)])
+  progress('瀏覽器解析 .fig')
+  const data = await unpackScene(bytes, timeout, true)
+  return presentGraph(
+    editor,
+    deserializeSceneGraph(data),
+    name,
+    timeout,
+    progress,
+    undefined,
+    true
+  )
+}
+async function presentGraph(
+  editor: EditorStore,
+  graph: SceneGraph,
+  name: string,
+  timeout: AbortSignal,
+  progress: (phase: string) => void,
+  metrics: ((phase: string, elapsedMs: number) => void) | undefined,
+  editable: boolean
+) {
+  progress('準備畫布')
   let checkpoint = performance.now()
   const measure = (phase: string) => {
     const now = performance.now()
     metrics?.(phase, now - checkpoint)
     checkpoint = now
   }
-  const timeout = AbortSignal.any([signal, AbortSignal.timeout(60000)])
-  progress('載入場景')
-  const data = await unpackScene(bytes, timeout)
-  const graph = deserializeSceneGraph(data)
   measure('sceneHydrationMs')
   const load = editor.preparationController.begin({
     kind: 'storage-open',
@@ -68,12 +108,16 @@ export async function loadScene(
 }
 async function unpackScene(
   bytes: ArrayBuffer,
-  signal: AbortSignal
+  signal: AbortSignal,
+  fig = false
 ): Promise<SerializedSceneGraph> {
-  const worker = new Worker(
-    new URL('../transport/scene-worker.ts', import.meta.url),
-    { type: 'module' }
-  )
+  const worker = fig
+    ? new Worker(new URL('./client-fig-worker.ts', import.meta.url), {
+        type: 'module'
+      })
+    : new Worker(new URL('../transport/scene-worker.ts', import.meta.url), {
+        type: 'module'
+      })
   let abort: () => void = () => undefined
   try {
     return await new Promise((resolve, reject) => {
@@ -82,10 +126,15 @@ async function unpackScene(
       signal.addEventListener('abort', abort, { once: true })
       worker.onmessage = (
         event: MessageEvent<{
+          ready?: boolean
           scene?: { version: number; graph: SerializedSceneGraph }
           error?: boolean
         }>
       ) => {
+        if (fig && event.data.ready === true) {
+          if (!signal.aborted) worker.postMessage(bytes, [bytes])
+          return
+        }
         const scene = event.data.scene
         if (
           event.data.error ||
@@ -97,7 +146,7 @@ async function unpackScene(
         else resolve(scene.graph)
       }
       worker.onerror = () => reject(new Error('場景載入失敗'))
-      worker.postMessage(bytes, [bytes])
+      if (!fig) worker.postMessage(bytes, [bytes])
     })
   } finally {
     signal.removeEventListener('abort', abort)

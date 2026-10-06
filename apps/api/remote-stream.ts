@@ -3,7 +3,7 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import type { Config } from './config.ts'
 import type { createPortal } from './app.ts'
 import { createRemoteInput } from './remote-protocol.ts'
-import { remoteErrorCode } from './remote-sessions.ts'
+import { remoteErrorCode, remoteCookieName } from './remote-sessions.ts'
 
 export function attachRemoteStream(
   server: Server,
@@ -50,11 +50,7 @@ export function attachRemoteStream(
       const cookie =
         cookies[config.origin.startsWith('https:') ? '__Host-portal' : 'portal']
       const credential =
-        cookies[
-          config.origin.startsWith('https:')
-            ? '__Host-portal-stream'
-            : 'portal-stream'
-        ]
+        cookies[remoteCookieName(config.origin.startsWith('https:'), match[1])]
       const lease = await portal.remoteConnection(
         cookie,
         match[1],
@@ -121,6 +117,15 @@ export function attachRemoteStream(
         const connectedAt = performance.now()
         let firstPacket = false
         let closed = false
+        let pongAt = Date.now()
+        client.on('pong', () => {
+          pongAt = Date.now()
+        })
+        const heartbeat = setInterval(() => {
+          if (Date.now() - pongAt > 10000) return close('browser-unresponsive')
+          client.ping()
+        }, 5000)
+        heartbeat.unref()
         const close = (reason = 'session-stopped') => {
           if (closed) return
           closed = true
@@ -134,6 +139,7 @@ export function attachRemoteStream(
             })
           )
           clearTimeout(verifyTimer)
+          clearInterval(heartbeat)
           client.terminate()
           source.terminate()
           portal.remote?.connectionsFor(lease)?.delete(close)

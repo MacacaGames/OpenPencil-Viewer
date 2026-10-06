@@ -20,6 +20,7 @@ const begin = performance.now()
 const timings: Record<string, number> = {}
 let display: RemoteDisplay | undefined,
   displayTimer: ReturnType<typeof setInterval> | undefined,
+  generation = 0,
   appliedFontSize = 0
 function applyDisplay() {
   if (!display) return
@@ -38,12 +39,17 @@ function applyDisplay() {
 }
 async function syncDisplay() {
   try {
-    const response = await fetch(path + '/display', {
+    const response = await fetch(path + '/metadata', {
       signal: abort.signal,
       cache: 'no-store'
     })
     if (!response.ok) return
-    display = (await response.json()).display
+    const metadata = await response.json()
+    if (generation && metadata.generation !== generation) {
+      location.reload()
+      return
+    }
+    display = metadata.display
     applyDisplay()
   } catch {}
 }
@@ -59,14 +65,16 @@ onMounted(async () => {
       name: string
       revision: string
       mode: string
+      generation: number
       display?: RemoteDisplay
     } = await metadataResponse.json()
+    generation = metadata.generation
     display = metadata.display
     applyDisplay()
     window.addEventListener('resize', applyDisplay)
-    displayTimer = setInterval(() => void syncDisplay(), 1000)
+    displayTimer = setInterval(() => void syncDisplay(), 500)
     editable.value = metadata.mode === 'session-edit'
-    const response = await fetch(path + '/scene', {
+    const response = await fetch(path + '/scene?generation=' + generation, {
       signal: abort.signal,
       cache: 'no-store'
     })
@@ -101,6 +109,7 @@ onMounted(async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ready: true,
+        generation,
         loadMs: performance.now() - begin,
         timings
       }),
@@ -112,7 +121,7 @@ onMounted(async () => {
     void fetch(path + '/ready', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ready: false })
+      body: JSON.stringify({ ready: false, generation })
     })
   }
 })

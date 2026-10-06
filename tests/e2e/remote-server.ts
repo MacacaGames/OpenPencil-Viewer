@@ -39,11 +39,20 @@ const upstream = new WebSocketServer({ host: '127.0.0.1', port: 0 })
 await once(upstream, 'listening')
 const address = upstream.address()
 if (!address || typeof address === 'string') throw new Error('test socket')
+let pauseStartup = false
 const worker = {
   corePath,
   streamUrl: `http://127.0.0.1:${address.port}`,
   start: async (lease: RemoteLease) => {
     mkdirSync(base + '/remote/' + lease.id, { recursive: true })
+    if (pauseStartup)
+      await new Promise<void>((_resolve, reject) => {
+        lease.abort.signal.addEventListener(
+          'abort',
+          () => reject(new Error('synthetic startup canceled')),
+          { once: true }
+        )
+      })
   },
   stop: async (id: string) => {
     console.log('synthetic worker stopped', id)
@@ -51,9 +60,15 @@ const worker = {
 }
 const fixture = await createGoogleFixture(base, 3215, {
   viewerMode: 'selkies',
+  maxSessions: 2,
+  allowClientEditor: true,
   remoteWorker: () => worker
 })
 const app = new Hono()
+app.post('/__fixture/pause-startup', async (c) => {
+  pauseStartup = (await c.req.json()).paused === true
+  return c.json({ ok: true })
+})
 app.get('/__fixture/google', (c) => {
   const url = new URL(c.req.url)
   return c.redirect(
@@ -66,6 +81,17 @@ app.get('/__fixture/google', (c) => {
 })
 app.get('/__fixture/lease', (c) =>
   c.json({ ticket: fixture.portal.remote?.leases[0]?.ticket })
+)
+app.get('/__fixture/status', (c) =>
+  c.json({
+    leases: fixture.portal.remote?.leases.map((lease) => ({
+      id: lease.id,
+      tab: lease.tab,
+      file: lease.file.name,
+      generation: lease.generation,
+      ready: lease.ready
+    }))
+  })
 )
 app.route('/', fixture.portal.app)
 const server = serve({

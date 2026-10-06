@@ -18,6 +18,7 @@ const limits = {
   appPort: 8085 as const,
   streamPort: 8086 as const,
   maxSessions: 4,
+  disconnectGraceMs: 3000,
   maxWidth: 1920,
   maxHeight: 1080,
   maxPixels: 2073600,
@@ -463,4 +464,30 @@ test('Remote capacity defaults to four and rejects invalid limits or overlapping
       parseConfig({ ...raw, remote: { ...raw.remote, maxSessions } })
     )
   assert.throws(() => parseConfig({ ...raw, port: 8087 }), /isolated/)
+})
+
+test('Client editor requires an explicit opt-in on the accepted session-edit profile; disconnect grace is bounded', () => {
+  const raw = JSON.parse(
+    readFileSync('deploy/selkies/config.example.json', 'utf8')
+  )
+  raw.googleClientId = raw.googleClientSecret = 'synthetic'
+  assert.equal(parseConfig(raw).allowClientEditor, false)
+  assert.equal(
+    parseConfig({ ...raw, allowClientEditor: true }).allowClientEditor,
+    true
+  )
+  for (const patch of [
+    { mode: 'read-only' },
+    { authorizationMode: 'dsm-strict' },
+    { viewerMode: 'native', remote: undefined }
+  ])
+    assert.throws(
+      () => parseConfig({ ...raw, ...patch, allowClientEditor: true }),
+      /client editor|session-edit/
+    )
+  assert.equal(parseConfig(raw).remote?.disconnectGraceMs, 3000)
+  for (const disconnectGraceMs of [0, 15001, 2.5])
+    assert.throws(() =>
+      parseConfig({ ...raw, remote: { ...raw.remote, disconnectGraceMs } })
+    )
 })

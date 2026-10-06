@@ -36,6 +36,7 @@ export async function createGoogleFixture(
     remoteWorker?: (slot: number) => RemoteWorker
     withThumbnail?: boolean
     maxSessions?: number
+    allowClientEditor?: boolean
   } = {}
 ) {
   const source = resolve(base, 'source'),
@@ -60,6 +61,7 @@ export async function createGoogleFixture(
     identityProvider: 'google-oidc',
     authorizationMode: 'google-mount',
     viewerMode: options.viewerMode,
+    allowClientEditor: options.allowClientEditor,
     remote:
       options.viewerMode === 'selkies'
         ? {
